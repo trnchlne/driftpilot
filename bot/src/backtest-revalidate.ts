@@ -1,6 +1,6 @@
 /**
- * Re-validate: do the optimal params change with minAtrPct=0.035?
- * Tests the top combined configs + some neighboring values with the new filter.
+ * Re-validate: sweep uncertainMultiple alongside other sensitive params.
+ * Tests all sensitive params including the now-configurable uncertain multiplier.
  *
  * Usage: cd bot && npx tsx src/backtest-revalidate.ts
  */
@@ -35,6 +35,7 @@ interface Overrides {
   entryBandMultiple: number;
   reversionSlMultiple: number;
   minAtrPct: number;
+  uncertainMultiple: number;
 }
 
 function loadTicks(): Tick[] {
@@ -121,7 +122,7 @@ function main(): void {
   const allTicks = loadTicks();
   const lastTs = allTicks[allTicks.length - 1].publishTime;
 
-  // Sensitive params to cross with minAtrPct=0.035
+  // Sweep all sensitive params including uncertainMultiple
   const configs: { label: string; o: Overrides }[] = [];
 
   const base = {
@@ -135,16 +136,17 @@ function main(): void {
     minAtrPct: 0.035,
   };
 
-  // Cross the sensitive params: atr, trail, signal, sigWin, delay, trendThr, rangeThr
+  // Cross the sensitive params: atr, trail, signal, sigWin, delay, trendThr, rangeThr, uncMult
   const atrs = [85, 90, 95];
-  const trails = [0.6, 0.7, 0.8];
+  const trails = [0.6, 0.7, 0.8, 0.9, 1.0];
   const sigs = [4.0, 4.5, 5.0];
   const sigWins = [20*60, 25*60, 30*60];
   const delays = [240, 300, 360];
-  const trends = [1.2, 1.3, 1.5];
-  const ranges = [0.8, 0.9, 1.0];
+  const trends = [1.2, 1.5];           // confirmed insensitive — keep 2 to verify
+  const ranges = [0.9, 1.0];            // confirmed insensitive — keep 2 to verify
+  const uncMults = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 2.0];
 
-  // That's 3^7 = 2187 combos — very manageable
+  // 3 × 5 × 3 × 3 × 3 × 2 × 2 × 8 = 12,960 combos
   for (const atr of atrs) {
     for (const trail of trails) {
       for (const sig of sigs) {
@@ -152,10 +154,12 @@ function main(): void {
           for (const delay of delays) {
             for (const trend of trends) {
               for (const range of ranges) {
-                configs.push({
-                  label: `atr=${atr} tr=${trail} sig=${sig} win=${sigWin/60}m dly=${delay} t=${trend} r=${range}`,
-                  o: { ...base, atrPeriod: atr, trailingAtrMultiple: trail, signalMultiple: sig, signalWindowSeconds: sigWin, trailDelaySeconds: delay, trendThreshold: trend, rangeThreshold: range },
-                });
+                for (const unc of uncMults) {
+                  configs.push({
+                    label: `atr=${atr} tr=${trail} sig=${sig} win=${sigWin/60}m dly=${delay} t=${trend} r=${range} unc=${unc}`,
+                    o: { ...base, atrPeriod: atr, trailingAtrMultiple: trail, signalMultiple: sig, signalWindowSeconds: sigWin, trailDelaySeconds: delay, trendThreshold: trend, rangeThreshold: range, uncertainMultiple: unc },
+                  });
+                }
               }
             }
           }
@@ -164,7 +168,7 @@ function main(): void {
     }
   }
 
-  console.log(`Testing ${configs.length} configs with minAtrPct=0.035\n`);
+  console.log(`Testing ${configs.length} configs (sweeping uncertainMultiple + all sensitive params)\n`);
 
   // Run on both 90d and 180d
   const windows = [90, 180];
@@ -204,12 +208,12 @@ function main(): void {
 
   console.log(`\nDone in ${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
 
-  // Print top 25
-  console.log('TOP 25 CONFIGS with minAtrPct=0.035 (by composite score):');
-  console.log('  #   atr  trail  sig  sWin  dly  tThr  rThr | 90d ROI  90d Shp | 180d ROI  180d Shp  180d DD | Avg ROI');
-  console.log('  ' + '─'.repeat(110));
+  // Print top 40
+  console.log('TOP 40 CONFIGS (by composite score):');
+  console.log('  #   atr  trail  sig  sWin  dly  tThr  rThr   unc | 90d ROI  90d Shp | 180d ROI  180d Shp  180d DD  trades | Avg ROI');
+  console.log('  ' + '─'.repeat(120));
 
-  for (let i = 0; i < Math.min(25, results.length); i++) {
+  for (let i = 0; i < Math.min(40, results.length); i++) {
     const { o, r90, r180, avgRoi } = results[i];
     console.log(
       `  ${String(i+1).padStart(3)}  ` +
@@ -219,37 +223,50 @@ function main(): void {
       `${(o.signalWindowSeconds/60 + 'm').padStart(4)}  ` +
       `${String(o.trailDelaySeconds).padStart(3)}  ` +
       `${o.trendThreshold.toFixed(1).padStart(4)}  ` +
-      `${o.rangeThreshold.toFixed(1).padStart(4)} | ` +
+      `${o.rangeThreshold.toFixed(1).padStart(4)}  ` +
+      `${o.uncertainMultiple.toFixed(1).padStart(4)} | ` +
       `${(r90.roi >= 0 ? '+' : '') + r90.roi.toFixed(1) + '%'}`.padStart(9) + `  ` +
       `${r90.sharpe.toFixed(3)}`.padStart(7) + ` | ` +
       `${(r180.roi >= 0 ? '+' : '') + r180.roi.toFixed(1) + '%'}`.padStart(9) + `  ` +
       `${r180.sharpe.toFixed(3)}`.padStart(8) + `  ` +
-      `${r180.maxDd.toFixed(1) + '%'}`.padStart(7) + ` | ` +
+      `${r180.maxDd.toFixed(1) + '%'}`.padStart(7) + `  ` +
+      `${String(r180.trades).padStart(5)} | ` +
       `${(avgRoi >= 0 ? '+' : '') + avgRoi.toFixed(1) + '%'}`.padStart(8)
     );
   }
 
   // Show what the current config scores
   const currentIdx = results.findIndex(r =>
-    r.o.atrPeriod === 90 && r.o.trailingAtrMultiple === 0.7 && r.o.signalMultiple === 4.5 &&
+    r.o.atrPeriod === 90 && r.o.trailingAtrMultiple === 0.8 && r.o.signalMultiple === 4.5 &&
     r.o.signalWindowSeconds === 25*60 && r.o.trailDelaySeconds === 300 &&
-    r.o.trendThreshold === 1.2 && r.o.rangeThreshold === 1.0
+    r.o.trendThreshold === 1.2 && r.o.rangeThreshold === 1.0 && r.o.uncertainMultiple === 1.0
   );
   if (currentIdx >= 0) {
-    console.log(`\n  Current config (atr=90 trail=0.7 sig=4.5 win=25m dly=300 trend=1.2 range=1.0) is rank #${currentIdx + 1} of ${results.length}`);
+    console.log(`\n  Current config (atr=90 trail=0.8 sig=4.5 win=25m dly=300 trend=1.2 range=1.0 unc=1.0) is rank #${currentIdx + 1} of ${results.length}`);
   }
 
   // Check if #1 differs from current
   const top = results[0].o;
-  const isSame = top.atrPeriod === 90 && top.trailingAtrMultiple === 0.7 && top.signalMultiple === 4.5 &&
+  const isSame = top.atrPeriod === 90 && top.trailingAtrMultiple === 0.8 && top.signalMultiple === 4.5 &&
     top.signalWindowSeconds === 25*60 && top.trailDelaySeconds === 300 &&
-    top.trendThreshold === 1.2 && top.rangeThreshold === 1.0;
+    top.trendThreshold === 1.2 && top.rangeThreshold === 1.0 && top.uncertainMultiple === 1.0;
 
   if (isSame) {
-    console.log('\n  ✓ Current config is STILL the winner with minAtrPct=0.035 — no change needed.');
+    console.log('\n  ✓ Current config is STILL the winner — no change needed.');
   } else {
-    console.log(`\n  ⚠ NEW winner with minAtrPct=0.035:`);
-    console.log(`    atr=${top.atrPeriod} trail=${top.trailingAtrMultiple} sig=${top.signalMultiple} win=${top.signalWindowSeconds/60}m dly=${top.trailDelaySeconds} trend=${top.trendThreshold} range=${top.rangeThreshold}`);
+    console.log(`\n  ⚠ NEW winner:`);
+    console.log(`    atr=${top.atrPeriod} trail=${top.trailingAtrMultiple} sig=${top.signalMultiple} win=${top.signalWindowSeconds/60}m dly=${top.trailDelaySeconds} trend=${top.trendThreshold} range=${top.rangeThreshold} unc=${top.uncertainMultiple}`);
+  }
+
+  // Show distribution of uncertainMultiple in top 40
+  const top40 = results.slice(0, 40);
+  const uncDist: Record<number, number> = {};
+  for (const r of top40) {
+    uncDist[r.o.uncertainMultiple] = (uncDist[r.o.uncertainMultiple] || 0) + 1;
+  }
+  console.log('\n  uncertainMultiple distribution in top 40:');
+  for (const [unc, count] of Object.entries(uncDist).sort((a, b) => Number(b[1]) - Number(a[1]))) {
+    console.log(`    unc=${unc}: ${count} entries`);
   }
 }
 

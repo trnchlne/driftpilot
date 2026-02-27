@@ -57,6 +57,7 @@ export type StrategyConfig =
       reversionSlMultiple: number;
       cooldownSeconds: number; betSizeSol: number;
       minAtrPct?: number;
+      uncertainMultiple?: number;
     };
 
 export const STRATEGIES: StrategyConfig[] = [
@@ -97,7 +98,7 @@ export const STRATEGIES: StrategyConfig[] = [
   // Fine-grid optimized: avg +158% ROI across 30-180d (10x lev, 30% Kelly, pure ATR trail)
   // Combined cross-parameter search: 4374 combos, all periods positive, avg Sharpe 0.213
   // Key changes from prev: trail 0.8→0.7, sl 1.5→1.0, sig 4.0→4.5, win 30m→25m, trend 1.5→1.2, range 0.8→1.0
-  { type: 'regime', name: 'R-base',   atrPeriod: 90, regimeWindowSeconds: 4*3600, trendThreshold: 1.2, rangeThreshold: 1.0, signalWindowSeconds: 25*60, signalMultiple: 4.5, trailingAtrMultiple: 0.8, slAtrMultiple: 1.0, trailDelaySeconds: 300, meanWindowSeconds: 1*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035 },
+  { type: 'regime', name: 'R-base',   atrPeriod: 90, regimeWindowSeconds: 4*3600, trendThreshold: 1.2, rangeThreshold: 1.0, signalWindowSeconds: 25*60, signalMultiple: 4.5, trailingAtrMultiple: 0.8, slAtrMultiple: 1.0, trailDelaySeconds: 300, meanWindowSeconds: 1*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, uncertainMultiple: 1.0 },
   // Selective variant: trend-heavy regime, higher signal bar — fewer trades, better Sharpe
   { type: 'regime', name: 'R-sharp',  atrPeriod: 60, regimeWindowSeconds: 4*3600, trendThreshold: 1.0, rangeThreshold: 0.2, signalWindowSeconds: 30*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 480, meanWindowSeconds: 2*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 300, betSizeSol: 1.0 },
   // Fast ATR variant: quicker adaptation, 15m signal window — more responsive to vol changes

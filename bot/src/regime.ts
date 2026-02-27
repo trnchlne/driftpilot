@@ -60,6 +60,10 @@ export interface RegimeConfig {
   // Uncertain regime SL override (default 1.0× — can be raised to reduce chop exits)
   uncertainSlMultiple?: number;
 
+  // Uncertain entry threshold multiplier (default 1.0 — same as trending)
+  // Higher values make uncertain entries harder to trigger (1.5 = 50% higher bar)
+  uncertainMultiple?: number;
+
   // Global
   cooldownSeconds: number;       // between any trades
   betSizeSol: number;
@@ -344,8 +348,8 @@ export class RegimeStrategy implements BaseStrategy {
     if (!signalOldest) return;
 
     const signalChange = ((price / signalOldest.price) - 1) * 100;
-    // 1.5× higher threshold for uncertain regime
-    const threshold = this.config.signalMultiple * this.scaledAtr(this.config.signalWindowSeconds / 60) * 1.5;
+    const uncMult = this.config.uncertainMultiple ?? 1.0;
+    const threshold = this.config.signalMultiple * this.scaledAtr(this.config.signalWindowSeconds / 60) * uncMult;
 
     // Either direction (no 4h trend constraint)
     if (signalChange > threshold) {
@@ -674,7 +678,7 @@ export class RegimeStrategy implements BaseStrategy {
     if (this.currentRegime === 'TRENDING' || this.currentRegime === 'UNCERTAIN') {
       if (signalOldest) {
         const signalChange = ((price / signalOldest.price) - 1) * 100;
-        const mult = this.currentRegime === 'UNCERTAIN' ? 1.5 : 1.0;
+        const mult = this.config.uncertainMultiple ?? 1.0;
         const threshold = this.config.signalMultiple * this.scaledAtr(this.config.signalWindowSeconds / 60) * mult;
         const signalPct = Math.abs(signalChange);
         const fillPct = threshold > 0 ? Math.round((signalPct / threshold) * 100) : 0;
