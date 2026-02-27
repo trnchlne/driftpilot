@@ -1,29 +1,17 @@
 services:
-  driftpilot:
-    build: .
-    volumes:
-      - ./data:/app/data
-      - ./output:/app/output
-    # Override CMD with your desired flags, e.g.:
-    #   docker compose run driftpilot --days 1 --no-charts
-    #   docker compose run driftpilot --live
-    # Default: fetch 7 days + generate charts
-    command: ["--db", "/app/data/driftpilot.db", "--output-dir", "/app/output"]
-
   bot:
+    container_name: driftpilot
+    image: ghcr.io/trnchlne/driftpilot:latest
     build: ./bot
-    environment:
-      - PRIVATE_KEY=${PRIVATE_KEY}
-      - RPC_URL=${RPC_URL}
-      - DRY_RUN=${DRY_RUN:-true}
+    command: ["npx", "tsx", "src/live.ts", "--only", "R-base", "--sub", "0"]
+    env_file: .env
+    ports:
+      - "3000:3000"
+    networks:
+      - trenchln
     restart: unless-stopped
 
-  live:
-    build: ./bot
-    command: ["npx", "tsx", "src/live.ts"]
-    environment:
-      - PRIVATE_KEY=${PRIVATE_KEY}
-      - RPC_URL=${RPC_URL}
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
+networks:
+  trenchln:
+    external: true
+    name: trenchln_default
