@@ -1,0 +1,24 @@
+{
+  "name": "driftpilot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@drift-labs/sdk": "^2.107.0",
+    "bs58": "^6.0.0",
+    "dotenv": "^17.2.4",
+    "eventsource": "^3.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

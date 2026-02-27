@@ -1,0 +1,9 @@
+.git
+.claude
+.venv
+__pycache__
+*.pyc
+*.db
+data/
+output/
+*.egg-info

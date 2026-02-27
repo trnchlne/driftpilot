@@ -1,0 +1,24 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+bot/.env
+
+# Node
+bot/node_modules/
+
+# Data files (too large for git)
+data/
+bot/data/
+*.jsonl
+*.db
+output/
