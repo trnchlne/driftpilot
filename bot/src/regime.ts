@@ -123,7 +123,6 @@ export class RegimeStrategy implements BaseStrategy {
   // Trail throttle: only update bestPrice & check trail once per minute
   // This prevents sub-second ticks from causing premature trail exits
   // that wouldn't occur with the backtest's 1-minute tick resolution
-  private lastTrailCheckTime = 0;
 
   // Warm-up
   private warmedUp = false;
@@ -372,10 +371,9 @@ export class RegimeStrategy implements BaseStrategy {
     this.bestPriceSinceEntry = price;
     this.entryRollingMean = this.rollingMean;
     this.entryScaledAtr = this.scaledAtr(this.config.meanWindowSeconds / 60); // snapshot for reversion SL
-    this.lastTrailCheckTime = now; // reset trail throttle
 
     this.bankroll?.reserveCapital(betSize);
-    this.paper.openPaper(direction, price, betSize, feeRate, now);
+    this.paper.openPaper(direction, price, betSize * LEVERAGE, feeRate, now);
     this.paper.saveEntryRegime(regime);
 
     const mode = regime === 'RANGING' ? 'REV' : 'TRD';
@@ -412,21 +410,13 @@ export class RegimeStrategy implements BaseStrategy {
       return;
     }
 
+    // Track best price on every tick (no throttle — just a single comparison)
+    this.trackBestPrice(price);
+
     const holdTime = now - this.entryTickTime;
 
-    // Trail delay: no trailing, just track best price
-    if (holdTime < this.config.trailDelaySeconds) {
-      if (now - this.lastTrailCheckTime >= 60) {
-        this.trackBestPrice(price);
-        this.lastTrailCheckTime = now;
-      }
-      return;
-    }
-
-    // Throttle: only check trail once per minute
-    if (now - this.lastTrailCheckTime < 60) return;
-    this.lastTrailCheckTime = now;
-    this.trackBestPrice(price);
+    // Trail delay: no trailing check yet, just tracking
+    if (holdTime < this.config.trailDelaySeconds) return;
 
     // Pure ATR trail — grid search showed this outperforms profit-locking
     const stopAtr = this.scaledAtr(this.config.regimeWindowSeconds / 60);
@@ -507,7 +497,7 @@ export class RegimeStrategy implements BaseStrategy {
     const trade = this.paper.closePaper(price, feeRate, now);
     if (trade) {
       this.lastTradeInfo.netPnl = trade.netPnlSol;
-      this.bankroll?.releaseCapital(trade.sizeSol);
+      this.bankroll?.releaseCapital(trade.sizeSol / LEVERAGE);
       this.bankroll?.recordPnl(trade.netPnlSol);
       const sign = trade.netPnlSol >= 0 ? '+' : '';
       const holdSec = (trade.exitTime - trade.entryTime).toFixed(0);
@@ -736,10 +726,13 @@ export class RegimeStrategy implements BaseStrategy {
     this.entryRegime = (extras?.entryRegime as Regime) ?? 'TRENDING'; // safe default
     this.bestPriceSinceEntry = extras?.bestPriceSinceEntry ?? pos.entryPrice;
     this.entryRollingMean = this.rollingMean; // use current mean (computed during warmup)
-    this.lastTrailCheckTime = 0;
 
-    // Re-open paper position (0 fee — entry already happened on Drift)
-    this.paper.openPaper(pos.direction, pos.entryPrice, pos.size, 0, this.entryTickTime);
+    // Re-open paper state only — Drift position already exists, don't place a duplicate order
+    if ('recoverPaper' in this.paper) {
+      (this.paper as any).recoverPaper(pos.direction, pos.entryPrice, pos.size, this.entryTickTime);
+    } else {
+      this.paper.openPaper(pos.direction, pos.entryPrice, pos.size, 0, this.entryTickTime);
+    }
 
     console.log(
       `[${this.name}] RECOVERED ${pos.direction.toUpperCase()} @ $${pos.entryPrice.toFixed(2)} | ` +

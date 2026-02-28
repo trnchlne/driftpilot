@@ -81,6 +81,11 @@ export class LiveTrader extends PaperTrader {
       });
   }
 
+  /** Recovery-only: reconstruct paper state without placing a Drift order */
+  recoverPaper(direction: Direction, price: number, sizeSol: number, time: number): void {
+    super.openPaper(direction, price, sizeSol, 0, time);
+  }
+
   override saveEntryRegime(regime: string): void {
     this.executor.updateEntryRegime(this.strategyName, regime);
   }
