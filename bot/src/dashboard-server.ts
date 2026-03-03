@@ -3,9 +3,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { DASHBOARD_HTML } from './dashboard-html.js';
 import { dashboardBus } from './dashboard-bus.js';
 import type { PriceEvent, EntryEvent, TradeEvent, LeaderboardEvent, AccountEvent } from './dashboard-bus.js';
+import type { PriceFeed } from './feed.js';
+import { decisionLog } from './decision-log.js';
+import type { DecisionType } from './decision-log.js';
 
 const PORT = 3000;
 const MAX_RECENT_TRADES = 50;
+const FEED_STALE_MS = 60_000; // feed considered stale after 60s without a tick
 
 export class DashboardServer {
   private server: ReturnType<typeof createServer> | null = null;
@@ -15,6 +19,12 @@ export class DashboardServer {
   private lastAccount: AccountEvent | null = null;
   private recentTrades: TradeEvent[] = [];
   private startTime = Date.now();
+  private priceFeed: PriceFeed | null = null;
+
+  /** Attach the price feed so health endpoint can report feed status */
+  setFeed(feed: PriceFeed): void {
+    this.priceFeed = feed;
+  }
 
   start(): void {
     this.server = createServer((req, res) => this.handleRequest(req, res));
@@ -61,6 +71,11 @@ export class DashboardServer {
 
     if (url === '/api/status') {
       this.handleApiStatus(res);
+      return;
+    }
+
+    if (url.startsWith('/api/decisions')) {
+      this.handleApiDecisions(req, res);
       return;
     }
 
@@ -128,13 +143,59 @@ export class DashboardServer {
     res.end(JSON.stringify(status, null, 2));
   }
 
+  private handleApiDecisions(req: IncomingMessage, res: ServerResponse): void {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    const params = url.searchParams;
+
+    const opts: {
+      limit?: number;
+      since?: number;
+      strategy?: string;
+      type?: DecisionType;
+    } = {};
+
+    if (params.has('limit')) opts.limit = parseInt(params.get('limit')!, 10);
+    if (params.has('since')) opts.since = parseInt(params.get('since')!, 10);
+    if (params.has('strategy')) opts.strategy = params.get('strategy')!;
+    if (params.has('type')) opts.type = params.get('type') as DecisionType;
+
+    // Default: last 200 entries
+    if (!opts.limit && !opts.since) opts.limit = 200;
+
+    const entries = decisionLog.query(opts);
+
+    const result = {
+      totalInLog: decisionLog.size,
+      returned: entries.length,
+      filters: { limit: opts.limit, since: opts.since, strategy: opts.strategy, type: opts.type },
+      decisions: entries,
+    };
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify(result, null, 2));
+  }
+
   private handleHealth(res: ServerResponse): void {
+    const lastTickMs = this.priceFeed?.lastTickMs ?? 0;
+    const silentMs = lastTickMs > 0 ? Date.now() - lastTickMs : -1;
+    const feedAlive = silentMs >= 0 && silentMs < FEED_STALE_MS;
+    const status = lastTickMs === 0 ? 'starting' : feedAlive ? 'ok' : 'stale';
+
     const health = {
-      status: 'ok',
+      status,
+      feedSilentSeconds: silentMs >= 0 ? Math.round(silentMs / 1000) : null,
+      lastTickTime: lastTickMs > 0 ? new Date(lastTickMs).toISOString() : null,
+      uptimeSeconds: Math.round((Date.now() - this.startTime) / 1000),
       price: this.lastPrice,
       leaderboard: this.lastLeaderboard,
     };
-    res.writeHead(200, {
+
+    const httpStatus = status === 'ok' || status === 'starting' ? 200 : 503;
+    res.writeHead(httpStatus, {
       'Content-Type': 'application/json',
       'Cache-Control': 'no-cache',
     });
@@ -147,10 +208,25 @@ export class DashboardServer {
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no', // disable nginx buffering
     });
 
     // Send initial comment to establish connection
     res.write(':ok\n\n');
+
+    // Send current state immediately so dashboard doesn't show "--" until next event
+    if (this.lastPrice) {
+      res.write(`event: price\ndata: ${JSON.stringify(this.lastPrice)}\n\n`);
+    }
+    if (this.lastLeaderboard) {
+      res.write(`event: leaderboard\ndata: ${JSON.stringify(this.lastLeaderboard)}\n\n`);
+    }
+    if (this.lastAccount) {
+      res.write(`event: account\ndata: ${JSON.stringify(this.lastAccount)}\n\n`);
+    }
+    for (const trade of this.recentTrades) {
+      res.write(`event: trade\ndata: ${JSON.stringify(trade)}\n\n`);
+    }
 
     this.clients.add(res);
 

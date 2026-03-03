@@ -20,6 +20,13 @@ export class PriceFeed {
   private es: EventSource | null = null;
   private consecutiveFailures = 0;
   private stopped = false;
+  private lastTickTime = 0;       // wall-clock ms of last received tick
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Wall-clock ms when the last tick was received (0 = never) */
+  get lastTickMs(): number {
+    return this.lastTickTime;
+  }
 
   onTick(cb: TickCallback): void {
     this.callbacks.push(cb);
@@ -28,6 +35,7 @@ export class PriceFeed {
   start(): void {
     this.stopped = false;
     this.connect();
+    this.startWatchdog();
   }
 
   stop(): void {
@@ -36,6 +44,36 @@ export class PriceFeed {
       this.es.close();
       this.es = null;
     }
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+  }
+
+  /**
+   * Watchdog: if no tick arrives for STALE_THRESHOLD_MS, the SSE stream
+   * has silently died (server stopped sending without closing). Force
+   * reconnect so the bot doesn't sit idle for hours/days.
+   */
+  private startWatchdog(): void {
+    const STALE_THRESHOLD_MS = 60_000; // 60 seconds without a tick → stale
+    const CHECK_INTERVAL_MS = 15_000;  // check every 15 seconds
+
+    this.watchdogTimer = setInterval(() => {
+      if (this.stopped) return;
+      if (this.lastTickTime === 0) return; // haven't received first tick yet
+
+      const silentMs = Date.now() - this.lastTickTime;
+      if (silentMs > STALE_THRESHOLD_MS) {
+        console.warn(`[feed] Watchdog: no tick for ${Math.round(silentMs / 1000)}s — force reconnecting`);
+        if (this.es) {
+          this.es.close();
+          this.es = null;
+        }
+        this.consecutiveFailures++;
+        this.connect();
+      }
+    }, CHECK_INTERVAL_MS);
   }
 
   private connect(): void {
@@ -60,6 +98,8 @@ export class PriceFeed {
 
           const price = parseInt(priceData.price) * 10 ** parseInt(priceData.expo);
           const publishTime = parseInt(priceData.publish_time);
+
+          this.lastTickTime = Date.now();
 
           const tick: Tick = { feedId, price, publishTime };
           for (const cb of this.callbacks) {

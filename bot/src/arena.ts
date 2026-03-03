@@ -1,6 +1,7 @@
 import type { Tick } from './feed.js';
 import type { BaseStrategy, PerformanceMetrics } from './base-strategy.js';
 import { dashboardBus } from './dashboard-bus.js';
+import { decisionLog } from './decision-log.js';
 
 const EVAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DASH_INTERVAL_MS = 10 * 1000; // 10 seconds
@@ -90,6 +91,16 @@ export class Arena {
     }
 
     console.log('');
+
+    // Emit state snapshots to decision log (one per strategy)
+    for (const { strategy, metrics } of results) {
+      const thinking = strategy.getThinking();
+      decisionLog.log('state_snapshot', strategy.name, 0,
+        `${uptimeStr} | ${metrics.totalTrades} trades | PnL ${metrics.netPnlSol >= 0 ? '+' : ''}${metrics.netPnlSol.toFixed(4)} SOL | WR ${metrics.winRate.toFixed(0)}%`,
+        { uptime: uptimeStr, metrics: { trades: metrics.totalTrades, wins: metrics.wins, losses: metrics.losses,
+          winRate: +metrics.winRate.toFixed(1), netPnlSol: +metrics.netPnlSol.toFixed(6), sharpe: +metrics.sharpe.toFixed(2),
+          score: +metrics.score.toFixed(2) }, thinking });
+    }
   }
 
   private emitDashboard(): void {

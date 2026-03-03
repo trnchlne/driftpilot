@@ -4,6 +4,7 @@ import type { BaseStrategy, PerformanceMetrics, Direction, PaperTrade } from './
 import { PaperTrader } from './base-strategy.js';
 import { dashboardBus } from './dashboard-bus.js';
 import type { BankrollManager } from './bankroll.js';
+import { decisionLog } from './decision-log.js';
 
 /* ─── Fee Rates ─────────────────────────────────────────── */
 
@@ -120,9 +121,9 @@ export class RegimeStrategy implements BaseStrategy {
     regime: Regime;
   } | null = null;
 
-  // Trail throttle: only update bestPrice & check trail once per minute
-  // This prevents sub-second ticks from causing premature trail exits
-  // that wouldn't occur with the backtest's 1-minute tick resolution
+  // Decision log throttling
+  private lastBlockReason = '';       // avoid logging same block repeatedly
+  private lastSignalLogTime = 0;      // throttle signal near-miss logs
 
   // Warm-up
   private warmedUp = false;
@@ -198,6 +199,9 @@ export class RegimeStrategy implements BaseStrategy {
       const bufferReady = bufferSpan >= this.config.regimeWindowSeconds * 0.9;
       if (atrFull && bufferReady) {
         this.warmedUp = true;
+        decisionLog.log('warmup_complete', this.name, price,
+          `Warmup done — ATR ${this.atrBuffer.length} samples, buffer ${Math.round(bufferSpan / 60)}m`,
+          { atrSamples: this.atrBuffer.length, bufferSpanMin: Math.round(bufferSpan / 60), atrPct: this.atrPct });
       } else {
         return;
       }
@@ -217,6 +221,14 @@ export class RegimeStrategy implements BaseStrategy {
 
     // ── Cooldown ──
     if (this.lastExitTickTime > 0 && (now - this.lastExitTickTime) < this.config.cooldownSeconds) {
+      if (this.lastBlockReason !== 'cooldown') {
+        this.lastBlockReason = 'cooldown';
+        const remaining = this.config.cooldownSeconds - (now - this.lastExitTickTime);
+        decisionLog.log('entry_blocked', this.name, price,
+          `Cooldown — ${Math.round(remaining)}s remaining after ${this.lastExitReason} exit`,
+          { reason: 'cooldown', remainingSec: Math.round(remaining), lastExitReason: this.lastExitReason,
+            regime: this.currentRegime, atrPct: this.atrPct });
+      }
       return;
     }
 
@@ -224,7 +236,18 @@ export class RegimeStrategy implements BaseStrategy {
     if (this.atrPct <= 0) return;
 
     // Skip entries in dead volatility — prevents chop trades that block good signals
-    if (this.config.minAtrPct && this.atrPct < this.config.minAtrPct) return;
+    if (this.config.minAtrPct && this.atrPct < this.config.minAtrPct) {
+      if (this.lastBlockReason !== 'low_atr') {
+        this.lastBlockReason = 'low_atr';
+        decisionLog.log('entry_blocked', this.name, price,
+          `Low ATR — ${this.atrPct.toFixed(4)}% < min ${this.config.minAtrPct}%`,
+          { reason: 'low_atr', atrPct: this.atrPct, minAtrPct: this.config.minAtrPct, regime: this.currentRegime });
+      }
+      return;
+    }
+
+    // Clear block reason when we're actively scanning
+    this.lastBlockReason = '';
 
     switch (this.currentRegime) {
       case 'TRENDING':
@@ -258,6 +281,9 @@ export class RegimeStrategy implements BaseStrategy {
 
     const regimeAtr = this.scaledAtr(this.config.regimeWindowSeconds / 60);
 
+    const prevRegime = this.currentRegime;
+    const prevTrend = this.trendDirection;
+
     if (absChange > this.config.trendThreshold * regimeAtr) {
       this.currentRegime = 'TRENDING';
       this.trendDirection = changePct > 0 ? 'UP' : 'DOWN';
@@ -265,6 +291,21 @@ export class RegimeStrategy implements BaseStrategy {
       this.currentRegime = 'RANGING';
     } else {
       this.currentRegime = 'UNCERTAIN';
+    }
+
+    if (this.currentRegime !== prevRegime || (this.currentRegime === 'TRENDING' && this.trendDirection !== prevTrend)) {
+      const dirInfo = this.currentRegime === 'TRENDING' ? ` ${this.trendDirection}` : '';
+      decisionLog.log('regime_change', this.name, price,
+        `${prevRegime} → ${this.currentRegime}${dirInfo} | 4h change ${changePct >= 0 ? '+' : ''}${changePct.toFixed(3)}% vs ATR ${regimeAtr.toFixed(3)}%`,
+        {
+          from: prevRegime, to: this.currentRegime,
+          trendDirection: this.trendDirection,
+          changePct4h: +changePct.toFixed(4),
+          regimeAtr: +regimeAtr.toFixed(4),
+          trendThreshold: +(this.config.trendThreshold * regimeAtr).toFixed(4),
+          rangeThreshold: +(this.config.rangeThreshold * regimeAtr).toFixed(4),
+          atrPct: +this.atrPct.toFixed(4),
+        });
     }
   }
 
@@ -313,6 +354,8 @@ export class RegimeStrategy implements BaseStrategy {
       this.enter('long', price, now, 'TRENDING', TAKER_FEE_RATE);
     } else if (this.trendDirection === 'DOWN' && signalChange < -threshold) {
       this.enter('short', price, now, 'TRENDING', TAKER_FEE_RATE);
+    } else {
+      this.logSignalCheck('TRENDING', price, now, signalChange, threshold);
     }
   }
 
@@ -330,6 +373,17 @@ export class RegimeStrategy implements BaseStrategy {
     } else if (deviationPct < -band) {
       // Price below mean → long (expect reversion up)
       this.enter('long', price, now, 'RANGING', MAKER_FEE_RATE);
+    } else {
+      // Log near-misses (>30% of band, throttled to once per minute)
+      const fillPct = band > 0 ? Math.abs(deviationPct) / band : 0;
+      if (fillPct > 0.3 && now - this.lastSignalLogTime >= 60) {
+        this.lastSignalLogTime = now;
+        const side = deviationPct > 0 ? 'ABOVE' : 'BELOW';
+        decisionLog.log('signal_near_miss', this.name, price,
+          `RANGING — ${side} mean by ${Math.abs(deviationPct).toFixed(3)}% / ${band.toFixed(3)}% needed (${Math.round(fillPct * 100)}%)`,
+          { regime: 'RANGING', deviation: +deviationPct.toFixed(4), band: +band.toFixed(4), fillPct: +fillPct.toFixed(2),
+            rollingMean: +this.rollingMean.toFixed(2), atrPct: +this.atrPct.toFixed(4) });
+      }
     }
   }
 
@@ -355,6 +409,8 @@ export class RegimeStrategy implements BaseStrategy {
       this.enter('long', price, now, 'UNCERTAIN', TAKER_FEE_RATE);
     } else if (signalChange < -threshold) {
       this.enter('short', price, now, 'UNCERTAIN', TAKER_FEE_RATE);
+    } else {
+      this.logSignalCheck('UNCERTAIN', price, now, signalChange, threshold);
     }
   }
 
@@ -362,7 +418,12 @@ export class RegimeStrategy implements BaseStrategy {
 
   private enter(direction: Direction, price: number, now: number, regime: Regime, feeRate: number): void {
     const betSize = this.getBetSize();
-    if (betSize <= 0) return;
+    if (betSize <= 0) {
+      decisionLog.log('entry_blocked', this.name, price,
+        `Zero bet size — bankroll returned 0 (equity too low or fully deployed)`,
+        { reason: 'zero_bet', regime, direction, atrPct: +this.atrPct.toFixed(4) });
+      return;
+    }
 
     this.entryPrice = price;
     this.entryDirection = direction;
@@ -382,6 +443,27 @@ export class RegimeStrategy implements BaseStrategy {
       `regime=${regime} ATR=${this.atrPct.toFixed(3)}% ` +
       `${regime === 'RANGING' ? `mean=$${this.rollingMean.toFixed(2)}` : `trend=${this.trendDirection}`} (PAPER)`,
     );
+
+    // Build exit-level context so log readers know what the exits will be
+    const exitContext: Record<string, unknown> = { regime, direction, betSizeSol: +betSize.toFixed(4),
+      leveragedSize: +(betSize * LEVERAGE).toFixed(4), feeRate, atrPct: +this.atrPct.toFixed(4),
+      rollingMean: +this.rollingMean.toFixed(2), trendDirection: this.trendDirection };
+    if (regime === 'RANGING') {
+      const slPct = this.config.reversionSlMultiple * this.entryScaledAtr;
+      exitContext.tpTarget = `$${this.rollingMean.toFixed(2)} (rolling mean)`;
+      exitContext.slPct = +slPct.toFixed(3);
+      exitContext.slPrice = +(direction === 'long' ? price * (1 - slPct / 100) : price * (1 + slPct / 100)).toFixed(2);
+    } else {
+      exitContext.hardSlPct = HARD_SL_PCT;
+      exitContext.hardSlPrice = +(direction === 'long' ? price * (1 - HARD_SL_PCT / 100) : price * (1 + HARD_SL_PCT / 100)).toFixed(2);
+      exitContext.trailDelaySeconds = this.config.trailDelaySeconds;
+      const stopAtr = this.scaledAtr(this.config.regimeWindowSeconds / 60);
+      exitContext.trailPct = +(this.config.trailingAtrMultiple * stopAtr).toFixed(3);
+    }
+
+    decisionLog.log('entry', this.name, price,
+      `${mode} ${direction.toUpperCase()} @ $${price.toFixed(2)} — regime=${regime} ATR=${this.atrPct.toFixed(3)}% bet=${betSize.toFixed(4)} SOL`,
+      exitContext);
 
     dashboardBus.emitEntry({
       strategyName: this.name, type: 'regime', direction,
@@ -505,6 +587,38 @@ export class RegimeStrategy implements BaseStrategy {
         `[${this.name}] EXIT ${reason} (${holdSec}s) | $${trade.entryPrice.toFixed(2)} → $${trade.exitPrice.toFixed(2)} | ` +
         `regime=${this.entryRegime} net ${sign}${trade.netPnlSol.toFixed(6)} SOL (PAPER)`,
       );
+
+      const movePct = ((price / this.entryPrice) - 1) * 100;
+      const favorable = this.entryDirection === 'long' ? movePct : -movePct;
+      decisionLog.log('exit', this.name, price,
+        `EXIT ${reason} (${holdSec}s) ${this.entryDirection.toUpperCase()} $${trade.entryPrice.toFixed(2)}→$${trade.exitPrice.toFixed(2)} | ${sign}${trade.netPnlSol.toFixed(6)} SOL`,
+        {
+          reason, direction: this.entryDirection, entryRegime: this.entryRegime,
+          entryPrice: +trade.entryPrice.toFixed(2), exitPrice: +trade.exitPrice.toFixed(2),
+          holdSeconds: +holdSec, priceMovePct: +favorable.toFixed(3),
+          netPnlSol: +trade.netPnlSol.toFixed(6), sizeSol: +trade.sizeSol.toFixed(4),
+          atrPctAtExit: +this.atrPct.toFixed(4), trailPctAtExit: +trailPctAtExit.toFixed(3),
+          bestPriceSinceEntry: +this.bestPriceSinceEntry.toFixed(2),
+          currentRegime: this.currentRegime,
+          rollingMean: +this.rollingMean.toFixed(2),
+        });
+    }
+  }
+
+  /* ─── Signal logging (throttled) ──────────────────────── */
+
+  private logSignalCheck(regime: Regime, price: number, now: number, signalChange: number, threshold: number): void {
+    const fillPct = threshold > 0 ? Math.abs(signalChange) / threshold : 0;
+    // Only log near-misses (>30%), throttled to once per minute
+    if (fillPct > 0.3 && now - this.lastSignalLogTime >= 60) {
+      this.lastSignalLogTime = now;
+      const dir = signalChange > 0 ? 'UP' : 'DOWN';
+      const blocked = regime === 'TRENDING' && ((this.trendDirection === 'UP' && signalChange < 0) || (this.trendDirection === 'DOWN' && signalChange > 0));
+      const note = blocked ? ' (AGAINST trend — blocked)' : '';
+      decisionLog.log('signal_near_miss', this.name, price,
+        `${regime} — signal ${dir} ${Math.abs(signalChange).toFixed(3)}% / ${threshold.toFixed(3)}% needed (${Math.round(fillPct * 100)}%)${note}`,
+        { regime, signalChange: +signalChange.toFixed(4), threshold: +threshold.toFixed(4), fillPct: +fillPct.toFixed(2),
+          trendDirection: this.trendDirection, atrPct: +this.atrPct.toFixed(4), blocked });
     }
   }
 
@@ -668,7 +782,8 @@ export class RegimeStrategy implements BaseStrategy {
     if (this.currentRegime === 'TRENDING' || this.currentRegime === 'UNCERTAIN') {
       if (signalOldest) {
         const signalChange = ((price / signalOldest.price) - 1) * 100;
-        const mult = this.config.uncertainMultiple ?? 1.0;
+        // Only apply uncertainMultiple for UNCERTAIN regime (matches actual entry logic)
+        const mult = this.currentRegime === 'UNCERTAIN' ? (this.config.uncertainMultiple ?? 1.0) : 1.0;
         const threshold = this.config.signalMultiple * this.scaledAtr(this.config.signalWindowSeconds / 60) * mult;
         const signalPct = Math.abs(signalChange);
         const fillPct = threshold > 0 ? Math.round((signalPct / threshold) * 100) : 0;
@@ -738,6 +853,12 @@ export class RegimeStrategy implements BaseStrategy {
       `[${this.name}] RECOVERED ${pos.direction.toUpperCase()} @ $${pos.entryPrice.toFixed(2)} | ` +
       `regime=${this.entryRegime} best=$${this.bestPriceSinceEntry.toFixed(2)}`,
     );
+
+    decisionLog.log('recovery', this.name, pos.entryPrice,
+      `Recovered ${pos.direction.toUpperCase()} ${pos.size.toFixed(4)} SOL @ $${pos.entryPrice.toFixed(2)} — regime=${this.entryRegime}`,
+      { direction: pos.direction, size: +pos.size.toFixed(4), entryPrice: +pos.entryPrice.toFixed(2),
+        entryRegime: this.entryRegime, bestPriceSinceEntry: +this.bestPriceSinceEntry.toFixed(2),
+        hadStateFile: !!extras });
   }
 
   setBankroll(bm: BankrollManager): void {

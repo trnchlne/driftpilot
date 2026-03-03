@@ -243,12 +243,15 @@ async function main(): Promise<void> {
   const dashboard = new DashboardServer();
   dashboard.start();
 
+  // Wire feed to dashboard for health reporting
+  const feed = new PriceFeed();
+  dashboard.setFeed(feed);
+
   // Track SOL price + account balance
   let lastSol = 0;
   let lastAccountEmit = 0;
   const ACCOUNT_EMIT_INTERVAL_MS = 30_000; // 30s
 
-  const feed = new PriceFeed();
   feed.onTick((tick) => {
     arena.onTick(tick);
 
@@ -256,7 +259,9 @@ async function main(): Promise<void> {
     // Fan out SOL price + equity refresh to all per-sub bankrolls
     for (const bm of bankrolls) {
       bm.updateSolPrice(tick.price);
-      bm.refreshFromDrift().catch(() => {});
+      bm.refreshFromDrift().catch((err) => {
+        console.error('[live] Bankroll refresh failed:', err);
+      });
     }
     if (lastSol > 0) {
       dashboardBus.emitPrice({ sol: lastSol, timestamp: Date.now() });
@@ -324,6 +329,11 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
+
+// Catch unhandled promise rejections — prevents silent death of the event loop
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[live] Unhandled promise rejection:', reason);
+});
 
 main().catch((err) => {
   console.error('[live] Fatal error:', err);
