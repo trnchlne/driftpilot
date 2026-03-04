@@ -495,11 +495,11 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       strategyStates[entries[i].name] = getStatusClass(entries[i].thinking || {});
     }
     var bar = document.getElementById('tab-bar');
-    var html = '<button class="tab' + (activeTab === 'all' ? ' active' : '') + '" onclick="window._setTab(\'all\')">All</button>';
+    var html = '<button class="tab' + (activeTab === 'all' ? ' active' : '') + '" onclick="window._setTab(\\'all\\')">All</button>';
     for (var i = 0; i < entries.length; i++) {
       var name = entries[i].name;
       var sc = strategyStates[name] || 'scanning';
-      html += '<button class="tab' + (activeTab === name ? ' active' : '') + '" onclick="window._setTab(\'' + name + '\')">'
+      html += '<button class="tab' + (activeTab === name ? ' active' : '') + '" onclick="window._setTab(\\'' + name + '\\')">'
         + '<span class="tab-dot ' + sc + '"></span>' + name + '</button>';
     }
     bar.innerHTML = html;
