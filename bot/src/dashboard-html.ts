@@ -260,10 +260,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="account-bar" id="account-bar">
   <div class="acct-item"><div class="acct-label">Balance</div><div class="acct-value" id="acct-balance">--</div></div>
   <div class="acct-item"><div class="acct-label">Start</div><div class="acct-value neutral" id="acct-start">--</div></div>
-  <div class="acct-item"><div class="acct-label">Realized P&L</div><div class="acct-value" id="acct-realized">--</div></div>
-  <div class="acct-item"><div class="acct-label">Unrealized P&L</div><div class="acct-value" id="acct-unrealized">--</div></div>
-  <div class="acct-item"><div class="acct-label">Total P&L</div><div class="acct-value" id="acct-total">--</div></div>
-  <div class="acct-item"><div class="acct-label">ROI</div><div class="acct-value" id="acct-roi">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-realized-label">Realized P&L</div><div class="acct-value" id="acct-realized">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-unrealized-label">Unrealized P&L</div><div class="acct-value" id="acct-unrealized">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-total-label">Total P&L</div><div class="acct-value" id="acct-total">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-roi-label">ROI</div><div class="acct-value" id="acct-roi">--</div></div>
 </div>
 
 <div class="tab-bar" id="tab-bar"></div>
@@ -299,6 +299,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   var activeTab = 'all';
   var strategyStates = {};
   var lastLeaderboard = null;
+  var lastAccount = null;
 
   function fmt(n, d) {
     return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -505,10 +506,58 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     bar.innerHTML = html;
   }
 
+  function renderAccountBar() {
+    if (!lastAccount) return;
+    var d = lastAccount;
+    var sign = function(v) { return v >= 0 ? '+' : ''; };
+    var cls = function(v) { return v > 0.005 ? 'green' : v < -0.005 ? 'red' : 'neutral'; };
+
+    document.getElementById('acct-balance').textContent = '$' + fmt(d.balanceUsdc, 2);
+    document.getElementById('acct-start').textContent = '$' + fmt(d.startBalanceUsdc, 2);
+
+    var realized = d.realizedPnl;
+    var unrealized = d.unrealizedPnl;
+    var total = d.totalPnl;
+
+    // Per-strategy PnL when a strategy tab is selected
+    var stratLabel = '';
+    if (activeTab !== 'all' && lastLeaderboard && prevSol > 0) {
+      for (var i = 0; i < lastLeaderboard.entries.length; i++) {
+        if (lastLeaderboard.entries[i].name === activeTab) {
+          var stratPnlUsdc = lastLeaderboard.entries[i].metrics.netPnlSol * prevSol;
+          realized = stratPnlUsdc;
+          unrealized = 0;
+          total = stratPnlUsdc;
+          stratLabel = ' (' + activeTab + ')';
+          break;
+        }
+      }
+    }
+    document.getElementById('acct-realized-label').textContent = 'Realized P&L' + stratLabel;
+    document.getElementById('acct-unrealized-label').textContent = 'Unrealized P&L' + stratLabel;
+    document.getElementById('acct-total-label').textContent = 'Total P&L' + stratLabel;
+    document.getElementById('acct-roi-label').textContent = 'ROI' + stratLabel;
+
+    var realEl = document.getElementById('acct-realized');
+    realEl.textContent = sign(realized) + '$' + fmt(Math.abs(realized), 2);
+    realEl.className = 'acct-value ' + cls(realized);
+    var unrEl = document.getElementById('acct-unrealized');
+    unrEl.textContent = sign(unrealized) + '$' + fmt(Math.abs(unrealized), 2);
+    unrEl.className = 'acct-value ' + cls(unrealized);
+    var totEl = document.getElementById('acct-total');
+    totEl.textContent = sign(total) + '$' + fmt(Math.abs(total), 2);
+    totEl.className = 'acct-value ' + cls(total);
+    var roiEl = document.getElementById('acct-roi');
+    var roiPct = d.startBalanceUsdc > 0 ? (total / d.startBalanceUsdc) * 100 : 0;
+    roiEl.textContent = sign(roiPct) + fmt(Math.abs(roiPct), 2) + '%';
+    roiEl.className = 'acct-value ' + cls(roiPct);
+  }
+
   window._setTab = function(name) {
     activeTab = name;
     if (lastLeaderboard) renderStrategies(lastLeaderboard);
     renderFeed();
+    renderAccountBar();
   };
 
   /* ─── Strategy Panel ───────────────────────── */
@@ -745,24 +794,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     });
 
     es.addEventListener('account', function(e) {
-      var d = JSON.parse(e.data);
-      var sign = function(v) { return v >= 0 ? '+' : ''; };
-      var cls = function(v) { return v > 0.005 ? 'green' : v < -0.005 ? 'red' : 'neutral'; };
-      document.getElementById('acct-balance').textContent = '$' + fmt(d.balanceUsdc, 2);
-      document.getElementById('acct-start').textContent = '$' + fmt(d.startBalanceUsdc, 2);
-      var realEl = document.getElementById('acct-realized');
-      realEl.textContent = sign(d.realizedPnl) + '$' + fmt(Math.abs(d.realizedPnl), 4);
-      realEl.className = 'acct-value ' + cls(d.realizedPnl);
-      var unrEl = document.getElementById('acct-unrealized');
-      unrEl.textContent = sign(d.unrealizedPnl) + '$' + fmt(Math.abs(d.unrealizedPnl), 4);
-      unrEl.className = 'acct-value ' + cls(d.unrealizedPnl);
-      var totEl = document.getElementById('acct-total');
-      totEl.textContent = sign(d.totalPnl) + '$' + fmt(Math.abs(d.totalPnl), 4);
-      totEl.className = 'acct-value ' + cls(d.totalPnl);
-      var roiEl = document.getElementById('acct-roi');
-      var roiPct = d.startBalanceUsdc > 0 ? (d.totalPnl / d.startBalanceUsdc) * 100 : 0;
-      roiEl.textContent = sign(roiPct) + fmt(Math.abs(roiPct), 2) + '%';
-      roiEl.className = 'acct-value ' + cls(roiPct);
+      lastAccount = JSON.parse(e.data);
+      renderAccountBar();
     });
 
     es.onerror = function() {
