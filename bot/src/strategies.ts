@@ -101,8 +101,9 @@ export const STRATEGIES: StrategyConfig[] = [
   { type: 'regime', name: 'R-base',   atrPeriod: 90, regimeWindowSeconds: 4*3600, trendThreshold: 1.2, rangeThreshold: 1.0, signalWindowSeconds: 25*60, signalMultiple: 4.5, trailingAtrMultiple: 0.8, slAtrMultiple: 1.0, trailDelaySeconds: 300, meanWindowSeconds: 1*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, uncertainMultiple: 1.0 },
   // Selective variant: trend-heavy regime, higher signal bar — fewer trades, better Sharpe
   { type: 'regime', name: 'R-sharp',  atrPeriod: 60, regimeWindowSeconds: 4*3600, trendThreshold: 1.0, rangeThreshold: 0.2, signalWindowSeconds: 30*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 480, meanWindowSeconds: 2*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 300, betSizeSol: 1.0 },
-  // Fast ATR variant: quicker adaptation, 15m signal window — more responsive to vol changes
-  { type: 'regime', name: 'R-fast',   atrPeriod: 30, regimeWindowSeconds: 4*3600, trendThreshold: 1.5, rangeThreshold: 0.5, signalWindowSeconds: 15*60, signalMultiple: 4.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 480, meanWindowSeconds: 2*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 300, betSizeSol: 1.0 },
+  // Fast ATR variant: 20m/5.0 signal, tight entry band, low reversion SL — differentiated from R-base
+  // Grid search #2 (1920 combos): +228.7% ROI, 66.2% WR, Sharpe 0.067, MaxDD 33.6%, 5/5 periods+
+  { type: 'regime', name: 'R-fast',   atrPeriod: 30, regimeWindowSeconds: 4*3600, trendThreshold: 1.5, rangeThreshold: 0.5, signalWindowSeconds: 20*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 300, meanWindowSeconds: 2*3600, entryBandMultiple: 1.5, reversionSlMultiple: 3.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035 },
 ];
 
 // Strategy name → Drift subaccount ID (one subaccount per strategy for isolation)
@@ -119,9 +120,9 @@ export const SUBACCOUNT_MAP: Record<string, number> = {
   'M-bigtp3':     9,
   'M-active':    10,
   'M-base':      11,
-  'R-base':      12,
+  'R-base':       0,
   'R-sharp':     13,
-  'R-fast':      14,
+  'R-fast':       1,
 };
 
 export const ALL_SUB_ACCOUNT_IDS = Object.values(SUBACCOUNT_MAP);

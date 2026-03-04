@@ -3,7 +3,7 @@ services:
     container_name: driftpilot
     image: ghcr.io/trnchlne/driftpilot:latest
     build: ./bot
-    command: ["npx", "tsx", "src/live.ts", "--only", "R-base", "--sub", "0"]
+    command: ["npx", "tsx", "src/live.ts", "--only", "R-base,R-fast"]
     env_file: .env
     ports:
       - "3000:3000"

@@ -204,6 +204,44 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .trade-action.close { color: #a78bfa; }
   .trade-size { color: #5a5f73; }
   .empty-msg { color: #3a3f53; font-style: italic; padding: 10px 0; }
+
+  /* Tab bar */
+  .tab-bar {
+    display: flex;
+    gap: 6px;
+    padding: 8px 20px;
+    background: #0f1420;
+    border-bottom: 1px solid #1e2536;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 5px;
+    padding: 4px 14px;
+    border-radius: 14px;
+    background: #141825;
+    border: 1px solid #1e2536;
+    color: #7a8099;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .tab:hover { background: #1a1f30; color: #a5aac0; }
+  .tab.active {
+    background: #1a2744;
+    border-color: #2e5a9e;
+    color: #60a5fa;
+    font-weight: 600;
+  }
+  .tab .tab-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #3a3f53;
+    flex-shrink: 0;
+  }
+  .tab .tab-dot.scanning { background: #60a5fa; }
+  .tab .tab-dot.holding { background: #34d399; }
+  .tab .tab-dot.cooldown { background: #7a8099; }
+  .tab .tab-dot.warmup { background: #5a5f73; }
 </style>
 </head>
 <body>
@@ -227,6 +265,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="acct-item"><div class="acct-label">Total P&L</div><div class="acct-value" id="acct-total">--</div></div>
   <div class="acct-item"><div class="acct-label">ROI</div><div class="acct-value" id="acct-roi">--</div></div>
 </div>
+
+<div class="tab-bar" id="tab-bar"></div>
 
 <div class="main">
   <div class="chart-container">
@@ -256,6 +296,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   var currentLevels = null;
   var currentRegime = '';
   var prevSol = 0;
+  var activeTab = 'all';
+  var strategyStates = {};
+  var lastLeaderboard = null;
 
   function fmt(n, d) {
     return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -437,9 +480,41 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     ctx.fill();
   }
 
+  /* ─── Tabs ────────────────────────────────── */
+
+  function getStatusClass(thinking) {
+    var s = String(thinking.status || 'UNKNOWN');
+    if (s.indexOf('WARMING') >= 0) return 'warmup';
+    if (s.indexOf('COOLDOWN') >= 0) return 'cooldown';
+    if (s.indexOf('TRD') >= 0 || s.indexOf('REV') >= 0) return 'holding';
+    return 'scanning';
+  }
+
+  function buildTabs(entries) {
+    for (var i = 0; i < entries.length; i++) {
+      strategyStates[entries[i].name] = getStatusClass(entries[i].thinking || {});
+    }
+    var bar = document.getElementById('tab-bar');
+    var html = '<button class="tab' + (activeTab === 'all' ? ' active' : '') + '" onclick="window._setTab(\'all\')">All</button>';
+    for (var i = 0; i < entries.length; i++) {
+      var name = entries[i].name;
+      var sc = strategyStates[name] || 'scanning';
+      html += '<button class="tab' + (activeTab === name ? ' active' : '') + '" onclick="window._setTab(\'' + name + '\')">'
+        + '<span class="tab-dot ' + sc + '"></span>' + name + '</button>';
+    }
+    bar.innerHTML = html;
+  }
+
+  window._setTab = function(name) {
+    activeTab = name;
+    if (lastLeaderboard) renderStrategies(lastLeaderboard);
+    renderFeed();
+  };
+
   /* ─── Strategy Panel ───────────────────────── */
 
   function renderStrategies(data) {
+    lastLeaderboard = data;
     document.getElementById('uptime').textContent = data.uptime + ' | ' + data.totalTrades + ' trades';
 
     var panel = document.getElementById('strat-panel');
@@ -448,16 +523,46 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       return;
     }
 
+    buildTabs(data.entries);
+
+    // Filter entries by active tab
+    var filtered = data.entries;
+    if (activeTab !== 'all') {
+      filtered = data.entries.filter(function(e) { return e.name === activeTab; });
+    }
+
+    // Determine chart levels
+    currentLevels = null;
+    if (activeTab !== 'all') {
+      for (var li = 0; li < data.entries.length; li++) {
+        if (data.entries[li].name === activeTab && data.entries[li].thinking && data.entries[li].thinking._levels) {
+          currentLevels = data.entries[li].thinking._levels;
+          currentRegime = String(data.entries[li].thinking.regime || '');
+          break;
+        }
+      }
+    } else {
+      // "All" mode: prefer the strategy that's currently holding, else first with levels
+      var holdingLevels = null;
+      var firstLevels = null;
+      for (var li = 0; li < data.entries.length; li++) {
+        var th = data.entries[li].thinking || {};
+        if (th._levels) {
+          if (!firstLevels) { firstLevels = th._levels; currentRegime = String(th.regime || ''); }
+          var sc = getStatusClass(th);
+          if (sc === 'holding') { holdingLevels = th._levels; currentRegime = String(th.regime || ''); }
+        }
+      }
+      currentLevels = holdingLevels || firstLevels;
+    }
+
     var html = '';
-    for (var i = 0; i < data.entries.length; i++) {
-      var e = data.entries[i];
+    for (var i = 0; i < filtered.length; i++) {
+      var e = filtered[i];
       var m = e.metrics;
       var t = e.thinking || {};
       var statusStr = String(t.status || 'UNKNOWN');
-      var statusClass = 'scanning';
-      if (statusStr.indexOf('WARMING') >= 0) statusClass = 'warmup';
-      else if (statusStr.indexOf('COOLDOWN') >= 0) statusClass = 'cooldown';
-      else if (statusStr.indexOf('TRD') >= 0 || statusStr.indexOf('REV') >= 0) statusClass = 'holding';
+      var statusClass = getStatusClass(t);
 
       var pnlClass = m.netPnlSol > 0 ? 'pnl-pos' : m.netPnlSol < 0 ? 'pnl-neg' : 'pnl-zero';
       var pnlSign = m.netPnlSol >= 0 ? '+' : '';
@@ -542,12 +647,6 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       }
 
       html += '</div></div>';
-
-      // Extract levels for chart
-      if (t._levels) {
-        currentLevels = t._levels;
-        currentRegime = String(t.regime || '');
-      }
     }
     panel.innerHTML = html;
     drawChart();
@@ -564,8 +663,12 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   function renderFeed() {
     var feed = document.getElementById('trades-feed');
     var html = '';
-    for (var i = 0; i < trades.length; i++) {
-      var t = trades[i];
+    var filtered = trades;
+    if (activeTab !== 'all') {
+      filtered = trades.filter(function(t) { return t.strategyName === activeTab; });
+    }
+    for (var i = 0; i < filtered.length; i++) {
+      var t = filtered[i];
       var time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
 
       if (t.action === 'OPEN') {
