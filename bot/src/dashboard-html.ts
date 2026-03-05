@@ -512,27 +512,26 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     var sign = function(v) { return v >= 0 ? '+' : ''; };
     var cls = function(v) { return v > 0.005 ? 'green' : v < -0.005 ? 'red' : 'neutral'; };
 
-    document.getElementById('acct-balance').textContent = '$' + fmt(d.balanceUsdc, 2);
-    document.getElementById('acct-start').textContent = '$' + fmt(d.startBalanceUsdc, 2);
-
+    var balance = d.balanceUsdc;
+    var start = d.startBalanceUsdc;
     var realized = d.realizedPnl;
     var unrealized = d.unrealizedPnl;
     var total = d.totalPnl;
 
-    // Per-strategy PnL when a strategy tab is selected
+    // Per-strategy USDC data when a strategy tab is selected
     var stratLabel = '';
-    if (activeTab !== 'all' && lastLeaderboard && prevSol > 0) {
-      for (var i = 0; i < lastLeaderboard.entries.length; i++) {
-        if (lastLeaderboard.entries[i].name === activeTab) {
-          var stratPnlUsdc = lastLeaderboard.entries[i].metrics.netPnlSol * prevSol;
-          realized = stratPnlUsdc;
-          unrealized = 0;
-          total = stratPnlUsdc;
-          stratLabel = ' (' + activeTab + ')';
-          break;
-        }
-      }
+    if (activeTab !== 'all' && d.perStrategy && d.perStrategy[activeTab]) {
+      var ps = d.perStrategy[activeTab];
+      balance = ps.balanceUsdc;
+      start = ps.startBalanceUsdc;
+      realized = ps.realizedPnl;
+      unrealized = ps.unrealizedPnl;
+      total = ps.totalPnl;
+      stratLabel = ' (' + activeTab + ')';
     }
+
+    document.getElementById('acct-balance').textContent = '$' + fmt(balance, 2);
+    document.getElementById('acct-start').textContent = '$' + fmt(start, 2);
     document.getElementById('acct-realized-label').textContent = 'Realized P&L' + stratLabel;
     document.getElementById('acct-unrealized-label').textContent = 'Unrealized P&L' + stratLabel;
     document.getElementById('acct-total-label').textContent = 'Total P&L' + stratLabel;
@@ -548,7 +547,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     totEl.textContent = sign(total) + '$' + fmt(Math.abs(total), 2);
     totEl.className = 'acct-value ' + cls(total);
     var roiEl = document.getElementById('acct-roi');
-    var roiPct = d.startBalanceUsdc > 0 ? (total / d.startBalanceUsdc) * 100 : 0;
+    var roiPct = start > 0 ? (total / start) * 100 : 0;
     roiEl.textContent = sign(roiPct) + fmt(Math.abs(roiPct), 2) + '%';
     roiEl.className = 'acct-value ' + cls(roiPct);
   }
@@ -703,7 +702,16 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
   /* ─── Activity Feed ────────────────────────── */
 
+  function tradeKey(t) {
+    return t.strategyName + '|' + t.action + '|' + t.timestamp + '|' + (t.entry || t.price);
+  }
+
   function addActivity(item) {
+    // Deduplicate (server replays recent trades on reconnect)
+    var key = tradeKey(item);
+    for (var i = 0; i < trades.length; i++) {
+      if (tradeKey(trades[i]) === key) return;
+    }
     trades.unshift(item);
     if (trades.length > MAX_TRADES) trades.pop();
     renderFeed();

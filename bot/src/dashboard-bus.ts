@@ -46,6 +46,14 @@ export interface LeaderboardEvent {
   entries: LeaderboardEntry[];
 }
 
+export interface SubAccountPnl {
+  balanceUsdc: number;
+  unrealizedPnl: number;
+  startBalanceUsdc: number;
+  realizedPnl: number;
+  totalPnl: number;
+}
+
 export interface AccountEvent {
   balanceUsdc: number;
   unrealizedPnl: number;
@@ -53,6 +61,7 @@ export interface AccountEvent {
   realizedPnl: number;
   totalPnl: number;
   timestamp: number;
+  perStrategy?: Record<string, SubAccountPnl>;
 }
 
 class DashboardBus extends EventEmitter {
@@ -85,10 +94,13 @@ class DashboardBus extends EventEmitter {
   }
 
   emitEntry(event: EntryEvent): void {
+    // Pyth publishTime is in seconds; JS Date expects milliseconds
+    if (event.timestamp < 1e12) event.timestamp *= 1000;
     this.emit('entry', event);
   }
 
   emitTrade(event: TradeEvent): void {
+    if (event.timestamp < 1e12) event.timestamp *= 1000;
     this.emit('trade', event);
   }
 

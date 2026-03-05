@@ -267,21 +267,48 @@ async function main(): Promise<void> {
       dashboardBus.emitPrice({ sol: lastSol, timestamp: Date.now() });
     }
 
-    // Emit account balance periodically
+    // Emit account balance periodically (aggregate all active subaccounts)
     const now = Date.now();
     if (now - lastAccountEmit >= ACCOUNT_EMIT_INTERVAL_MS) {
       lastAccountEmit = now;
-      const subId = activeSubAccountIds[0];
-      const { totalCollateral, unrealizedPnl, allTimePnl } = executor.readAccountBalance(subId);
+      let totalCollateral = 0;
+      let unrealizedPnl = 0;
+      let allTimePnl = 0;
+
+      // Per-subaccount balances (dedup since multiple strategies may share a sub)
+      const subBalances: Record<number, { totalCollateral: number; unrealizedPnl: number; allTimePnl: number }> = {};
+      for (const subId of activeSubAccountIds) {
+        subBalances[subId] = executor.readAccountBalance(subId);
+        totalCollateral += subBalances[subId].totalCollateral;
+        unrealizedPnl += subBalances[subId].unrealizedPnl;
+        allTimePnl += subBalances[subId].allTimePnl;
+      }
+
+      // Build per-strategy breakdown
+      const perStrategy: Record<string, { balanceUsdc: number; unrealizedPnl: number; startBalanceUsdc: number; realizedPnl: number; totalPnl: number }> = {};
+      for (const [stratName, subId] of Object.entries(activeSubAccountMap)) {
+        const sb = subBalances[subId];
+        if (sb) {
+          perStrategy[stratName] = {
+            balanceUsdc: sb.totalCollateral,
+            unrealizedPnl: sb.unrealizedPnl,
+            startBalanceUsdc: sb.totalCollateral - sb.allTimePnl,
+            realizedPnl: sb.allTimePnl - sb.unrealizedPnl,
+            totalPnl: sb.allTimePnl,
+          };
+        }
+      }
+
       if (totalCollateral > 0) {
         const realizedPnl = allTimePnl - unrealizedPnl;
         dashboardBus.emitAccount({
           balanceUsdc: totalCollateral,
           unrealizedPnl,
-          startBalanceUsdc: totalCollateral - allTimePnl, // derived: deposits = balance - allTimePnl
+          startBalanceUsdc: totalCollateral - allTimePnl,
           realizedPnl,
           totalPnl: allTimePnl,
           timestamp: now,
+          perStrategy,
         });
       }
     }

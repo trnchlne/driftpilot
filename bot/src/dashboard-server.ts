@@ -18,6 +18,7 @@ export class DashboardServer {
   private lastLeaderboard: LeaderboardEvent | null = null;
   private lastAccount: AccountEvent | null = null;
   private recentTrades: TradeEvent[] = [];
+  private recentEntries: EntryEvent[] = [];
   private startTime = Date.now();
   private priceFeed: PriceFeed | null = null;
 
@@ -35,6 +36,8 @@ export class DashboardServer {
       this.broadcast('price', event);
     });
     dashboardBus.on('entry', (event: EntryEvent) => {
+      this.recentEntries.push(event);
+      if (this.recentEntries.length > MAX_RECENT_TRADES) this.recentEntries.shift();
       this.broadcast('entry', event);
     });
     dashboardBus.on('trade', (event: TradeEvent) => {
@@ -223,6 +226,9 @@ export class DashboardServer {
     }
     if (this.lastAccount) {
       res.write(`event: account\ndata: ${JSON.stringify(this.lastAccount)}\n\n`);
+    }
+    for (const entry of this.recentEntries) {
+      res.write(`event: entry\ndata: ${JSON.stringify(entry)}\n\n`);
     }
     for (const trade of this.recentTrades) {
       res.write(`event: trade\ndata: ${JSON.stringify(trade)}\n\n`);
