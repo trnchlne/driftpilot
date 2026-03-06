@@ -57,6 +57,7 @@ export class DriftExecutor {
     slPrice: number,
     entryTickTime: number,
     entryPrice: number,
+    useMarketOrder = false,
   ): Promise<boolean> {
     let filled = false;
     await this.withMutex(async () => {
@@ -66,40 +67,61 @@ export class DriftExecutor {
       // 1. Switch to subaccount
       await this.client.switchActiveUser(subAccountId);
 
-      // 2. Place post-only limit order (entry) — SLIDE ensures maker status
-      const oracleData = this.client.getOracleDataForPerpMarket(SOL_PERP_MARKET_INDEX);
-      const oraclePrice = oracleData.price; // BN in PRICE_PRECISION (1e6)
+      if (useMarketOrder) {
+        // ── Market order (taker) — guaranteed fill for trending entries ──
+        const entryParams = getMarketOrderParams({
+          marketIndex: SOL_PERP_MARKET_INDEX,
+          direction: posDir,
+          baseAssetAmount: baseAmount,
+        });
 
-      // Price the limit at oracle — SLIDE will adjust to best maker price
-      const limitPrice = oraclePrice;
+        const entryTx = await this.client.placePerpOrder(entryParams);
+        console.log(`[executor] MARKET ${direction.toUpperCase()} ${sizeSol} SOL sub=${subAccountId} (${stratName}) tx=${entryTx}`);
 
-      const maxTs = new BN(Math.floor(Date.now() / 1000) + LIMIT_ORDER_EXPIRY_SECONDS);
+        // Market orders fill immediately — brief poll to confirm
+        filled = await this.waitForFill(subAccountId, baseAmount);
+        if (!filled) {
+          console.log(`[executor] MARKET ORDER NOT FILLED — unexpected (${stratName})`);
+          try {
+            await this.client.cancelOrders(MarketType.PERP, SOL_PERP_MARKET_INDEX, undefined, undefined, subAccountId);
+          } catch { /* nothing to cancel */ }
+          return;
+        }
 
-      const entryParams = getLimitOrderParams({
-        marketIndex: SOL_PERP_MARKET_INDEX,
-        direction: posDir,
-        baseAssetAmount: baseAmount,
-        price: limitPrice,
-        postOnly: PostOnlyParams.SLIDE,
-        maxTs,
-      });
+        console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} SOL sub=${subAccountId} (${stratName})`);
+      } else {
+        // ── Post-only limit order (maker) — for ranging/reversion entries ──
+        const oracleData = this.client.getOracleDataForPerpMarket(SOL_PERP_MARKET_INDEX);
+        const oraclePrice = oracleData.price; // BN in PRICE_PRECISION (1e6)
 
-      const entryTx = await this.client.placePerpOrder(entryParams);
-      console.log(`[executor] LIMIT ${direction.toUpperCase()} ${sizeSol} SOL @ oracle sub=${subAccountId} (${stratName}) tx=${entryTx}`);
+        const limitPrice = oraclePrice;
+        const maxTs = new BN(Math.floor(Date.now() / 1000) + LIMIT_ORDER_EXPIRY_SECONDS);
 
-      // 3. Poll for fill (releases mutex while waiting would be ideal, but
-      //    for safety we hold it — no other ops should touch this sub mid-fill)
-      filled = await this.waitForFill(subAccountId, baseAmount);
+        const entryParams = getLimitOrderParams({
+          marketIndex: SOL_PERP_MARKET_INDEX,
+          direction: posDir,
+          baseAssetAmount: baseAmount,
+          price: limitPrice,
+          postOnly: PostOnlyParams.SLIDE,
+          maxTs,
+        });
 
-      if (!filled) {
-        console.log(`[executor] LIMIT EXPIRED — entry skipped (${stratName})`);
-        try {
-          await this.client.cancelOrders(MarketType.PERP, SOL_PERP_MARKET_INDEX, undefined, undefined, subAccountId);
-        } catch { /* order already expired */ }
-        return;
+        const entryTx = await this.client.placePerpOrder(entryParams);
+        console.log(`[executor] LIMIT ${direction.toUpperCase()} ${sizeSol} SOL @ oracle sub=${subAccountId} (${stratName}) tx=${entryTx}`);
+
+        // Poll for fill
+        filled = await this.waitForFill(subAccountId, baseAmount);
+
+        if (!filled) {
+          console.log(`[executor] LIMIT EXPIRED — entry skipped (${stratName})`);
+          try {
+            await this.client.cancelOrders(MarketType.PERP, SOL_PERP_MARKET_INDEX, undefined, undefined, subAccountId);
+          } catch { /* order already expired */ }
+          return;
+        }
+
+        console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} SOL sub=${subAccountId} (${stratName})`);
       }
-
-      console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} SOL sub=${subAccountId} (${stratName})`);
 
       // 4. Place trigger-market SL order (reduceOnly, on-chain protection)
       const slDir = direction === 'long' ? PositionDirection.SHORT : PositionDirection.LONG;

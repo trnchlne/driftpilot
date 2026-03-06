@@ -70,6 +70,9 @@ export class PaperTrader {
   /** Override in LiveTrader to persist entry regime to state file */
   saveEntryRegime(_regime: string): void {}
 
+  /** Override in LiveTrader to use market orders for trending entries */
+  setUseMarketEntry(_use: boolean): void {}
+
   openPaper(direction: Direction, price: number, sizeSol: number, feeRate: number, time?: number): void {
     if (this._inPosition) return;
     this._inPosition = true;

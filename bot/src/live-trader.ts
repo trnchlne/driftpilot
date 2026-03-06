@@ -22,6 +22,7 @@ export class LiveTrader extends PaperTrader {
   private lastEntryDirection: Direction = 'long';
   private lastEntryPrice = 0;
   private lastEntryTickTime = 0;
+  private _useMarketEntry = false;
 
   constructor(opts: {
     strategyName: string;
@@ -34,6 +35,10 @@ export class LiveTrader extends PaperTrader {
     this.subAccountId = opts.subAccountId;
     this.executor = opts.executor;
     this.slPct = opts.slPct;
+  }
+
+  override setUseMarketEntry(use: boolean): void {
+    this._useMarketEntry = use;
   }
 
   override openPaper(
@@ -55,7 +60,10 @@ export class LiveTrader extends PaperTrader {
       ? price * (1 - this.slPct / 100)
       : price * (1 + this.slPct / 100);
 
-    // Fire Drift limit order async (don't block the tick loop)
+    // Fire Drift order async (don't block the tick loop)
+    // Trending/uncertain entries use market orders for guaranteed fill;
+    // ranging entries use post-only limits for maker fees.
+    const useMarket = this._useMarketEntry;
     this.executor
       .open(
         this.strategyName,
@@ -65,6 +73,7 @@ export class LiveTrader extends PaperTrader {
         slPrice,
         this.lastEntryTickTime,
         price,
+        useMarket,
       )
       .then((filled) => {
         if (!filled) {
