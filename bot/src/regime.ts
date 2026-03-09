@@ -434,7 +434,7 @@ export class RegimeStrategy implements BaseStrategy {
     this.entryScaledAtr = this.scaledAtr(this.config.meanWindowSeconds / 60); // snapshot for reversion SL
 
     this.bankroll?.reserveCapital(betSize);
-    this.paper.setUseMarketEntry(regime !== 'RANGING');
+    this.paper.setUseMarketEntry(true);
     this.paper.openPaper(direction, price, betSize * LEVERAGE, feeRate, now);
     this.paper.saveEntryRegime(regime);
 

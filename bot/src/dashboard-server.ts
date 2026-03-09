@@ -6,6 +6,7 @@ import type { PriceEvent, EntryEvent, TradeEvent, LeaderboardEvent, AccountEvent
 import type { PriceFeed } from './feed.js';
 import { decisionLog } from './decision-log.js';
 import type { DecisionType } from './decision-log.js';
+import { BOT_VERSION } from './version.js';
 
 const PORT = 3000;
 const MAX_RECENT_TRADES = 50;
@@ -124,7 +125,7 @@ export class DashboardServer {
     }));
 
     const status = {
-      botVersion: 'driftpilot',
+      botVersion: BOT_VERSION,
       uptime: `${uptimeH}h`,
       uptimeMs,
       timestamp: new Date().toISOString(),
@@ -189,6 +190,7 @@ export class DashboardServer {
     const status = lastTickMs === 0 ? 'starting' : feedAlive ? 'ok' : 'stale';
 
     const health = {
+      version: BOT_VERSION,
       status,
       feedSilentSeconds: silentMs >= 0 ? Math.round(silentMs / 1000) : null,
       lastTickTime: lastTickMs > 0 ? new Date(lastTickMs).toISOString() : null,
