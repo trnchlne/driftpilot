@@ -115,12 +115,14 @@ export class DashboardServer {
     } : null;
 
     const trades = this.recentTrades.map(t => ({
+      tradeId: t.tradeId,
       strategy: t.strategyName,
       direction: t.direction,
       entry: t.entry,
       exit: t.exit,
       pnl: t.pnl,
       reason: t.reason,
+      bestPrice: t.bestPrice,
       time: new Date(t.timestamp * 1000).toISOString(),
     }));
 

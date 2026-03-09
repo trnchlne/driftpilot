@@ -71,6 +71,9 @@ export interface RegimeConfig {
 
   // Minimum ATR% to enter — skip entries in dead volatility (prevents chop trades blocking good signals)
   minAtrPct?: number;
+
+  // Portfolio TP: auto-close when trade P&L >= X% of total portfolio equity (0 = disabled)
+  portfolioTpPct?: number;
 }
 
 /* ─── RegimeStrategy ────────────────────────────────────── */
@@ -136,6 +139,7 @@ export class RegimeStrategy implements BaseStrategy {
 
     this.paper.onTrade((trade: PaperTrade) => {
       dashboardBus.emitTrade({
+        tradeId: trade.tradeId,
         strategyName: this.name,
         type: 'regime',
         direction: trade.direction,
@@ -143,6 +147,7 @@ export class RegimeStrategy implements BaseStrategy {
         exit: trade.exitPrice,
         pnl: trade.netPnlSol,
         reason: this.lastExitReason,
+        bestPrice: this.bestPriceSinceEntry,
         timestamp: trade.exitTime,
       });
     });
@@ -462,6 +467,7 @@ export class RegimeStrategy implements BaseStrategy {
       exitContext.trailPct = +(this.config.trailingAtrMultiple * stopAtr).toFixed(3);
     }
 
+    exitContext.tradeId = (this.paper as any)._tradeId;
     decisionLog.log('entry', this.name, price,
       `${mode} ${direction.toUpperCase()} @ $${price.toFixed(2)} — regime=${regime} ATR=${this.atrPct.toFixed(3)}% bet=${betSize.toFixed(4)} SOL`,
       exitContext);
@@ -475,6 +481,23 @@ export class RegimeStrategy implements BaseStrategy {
   /* ─── Exit Logic (locked to entry regime) ──────────────── */
 
   private checkExit(price: number, now: number): void {
+    // Portfolio TP: close when trade P&L >= X% of total equity
+    if (this.config.portfolioTpPct && this.config.portfolioTpPct > 0 && this.bankroll) {
+      const equity = this.bankroll.getEquity();
+      if (equity > 0) {
+        const sizeSol = this.paper.inPosition ? (this as any).paper._sizeSol : 0;
+        const pnlUsd = this.entryDirection === 'long'
+          ? sizeSol * (price - this.entryPrice)
+          : sizeSol * (this.entryPrice - price);
+        const pnlSol = price > 0 ? pnlUsd / price : 0;
+        const pnlPct = (pnlSol / equity) * 100;
+        if (pnlPct >= this.config.portfolioTpPct) {
+          this.exit(price, now, TAKER_FEE_RATE, 'portfolio-TP');
+          return;
+        }
+      }
+    }
+
     if (this.entryRegime === 'RANGING') {
       this.checkReversionExit(price);
     } else {
@@ -594,7 +617,7 @@ export class RegimeStrategy implements BaseStrategy {
       decisionLog.log('exit', this.name, price,
         `EXIT ${reason} (${holdSec}s) ${this.entryDirection.toUpperCase()} $${trade.entryPrice.toFixed(2)}→$${trade.exitPrice.toFixed(2)} | ${sign}${trade.netPnlSol.toFixed(6)} SOL`,
         {
-          reason, direction: this.entryDirection, entryRegime: this.entryRegime,
+          tradeId: trade.tradeId, reason, direction: this.entryDirection, entryRegime: this.entryRegime,
           entryPrice: +trade.entryPrice.toFixed(2), exitPrice: +trade.exitPrice.toFixed(2),
           holdSeconds: +holdSec, priceMovePct: +favorable.toFixed(3),
           netPnlSol: +trade.netPnlSol.toFixed(6), sizeSol: +trade.sizeSol.toFixed(4),
@@ -713,6 +736,11 @@ export class RegimeStrategy implements BaseStrategy {
           posLevels.trail = trailPrice;
           posLevels.best = this.bestPriceSinceEntry;
         }
+      }
+
+      if (this.config.portfolioTpPct && this.config.portfolioTpPct > 0) {
+        const portfolioPctNow = favorable * LEVERAGE * KELLY_FRACTION;
+        result['portfolio TP'] = `${portfolioPctNow.toFixed(1)}% / ${this.config.portfolioTpPct}% target (${Math.round(portfolioPctNow / this.config.portfolioTpPct * 100)}%)`;
       }
 
       result['_levels'] = posLevels;

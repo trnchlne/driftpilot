@@ -30,6 +30,7 @@ export interface BaseStrategy {
 export type Direction = 'long' | 'short';
 
 export interface PaperTrade {
+  tradeId: string;
   direction: Direction;
   entryPrice: number;
   exitPrice: number;
@@ -52,6 +53,8 @@ export class PaperTrader {
   private _sizeSol = 0;
   private _entryFeeRate = 0;
   private _entryTime = 0;
+  private _tradeId = '';
+  private _tradeCounter = 0;
   private readonly startTime: number;
   private _onTrade: OnTradeCallback | null = null;
 
@@ -81,6 +84,7 @@ export class PaperTrader {
     this._sizeSol = sizeSol;
     this._entryFeeRate = feeRate;
     this._entryTime = time ?? Date.now();
+    this._tradeId = `t${++this._tradeCounter}-${this._entryTime}`;
   }
 
   closePaper(price: number, feeRate: number, time?: number): PaperTrade | null {
@@ -106,6 +110,7 @@ export class PaperTrader {
     const netPnlSol = pnlSol - entryFeeSol - exitFeeSol;
 
     const trade: PaperTrade = {
+      tradeId: this._tradeId,
       direction: this._direction,
       entryPrice: entry,
       exitPrice: price,

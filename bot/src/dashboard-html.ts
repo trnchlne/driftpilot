@@ -703,6 +703,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   /* ─── Activity Feed ────────────────────────── */
 
   function tradeKey(t) {
+    if (t.tradeId) return t.tradeId + '|' + t.action;
     return t.strategyName + '|' + t.action + '|' + t.timestamp + '|' + (t.entry || t.price);
   }
 
@@ -740,12 +741,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       } else {
         var pnlClass = t.pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
         var sign = t.pnl >= 0 ? '+' : '';
+        var bestStr = t.bestPrice ? ' (best $' + fmt(t.bestPrice, 2) + ')' : '';
         html += '<div class="trade-line">'
           + '<span class="trade-time">' + time + '</span>'
           + '<span class="trade-name">' + t.strategyName + '</span>'
           + '<span class="trade-action close">EXIT</span>'
           + '<span class="trade-dir ' + t.direction + '">' + t.direction.toUpperCase() + '</span>'
-          + '<span class="trade-detail">$' + fmt(t.entry, 2) + ' &rarr; $' + fmt(t.exit, 2) + '</span>'
+          + '<span class="trade-detail">$' + fmt(t.entry, 2) + ' &rarr; $' + fmt(t.exit, 2) + bestStr + '</span>'
           + '<span class="trade-pnl ' + pnlClass + '">' + sign + t.pnl.toFixed(6) + ' SOL</span>'
           + '<span class="trade-detail">' + t.reason + '</span>'
           + '</div>';

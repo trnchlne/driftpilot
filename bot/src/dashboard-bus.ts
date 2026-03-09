@@ -15,6 +15,7 @@ export interface EntryEvent {
 }
 
 export interface TradeEvent {
+  tradeId?: string;
   strategyName: string;
   type: string;
   direction: string;
@@ -22,6 +23,7 @@ export interface TradeEvent {
   exit: number;
   pnl: number;
   reason: string;
+  bestPrice?: number;
   timestamp: number;
 }
 
