@@ -692,6 +692,15 @@ export class RegimeStrategy implements BaseStrategy {
         'ATR%': `${this.atrPct.toFixed(4)}%`,
       };
 
+      // Helper: format ROE/portfolio% at a hypothetical exit price
+      const fmtPnl = (exitPrice: number) => {
+        const mv = ((exitPrice / this.entryPrice) - 1) * 100;
+        const fav = this.entryDirection === 'long' ? mv : -mv;
+        const r = fav * LEVERAGE;
+        const p = fav * LEVERAGE * KELLY_FRACTION;
+        return `ROE ${r >= 0 ? '+' : ''}${r.toFixed(1)}% | portfolio ${p >= 0 ? '+' : ''}${p.toFixed(2)}%`;
+      };
+
       // Chart levels for in-position view
       const posLevels: Record<string, number> = { price, entry: this.entryPrice, mean: this.rollingMean };
 
@@ -701,8 +710,8 @@ export class RegimeStrategy implements BaseStrategy {
         const slPrice = this.entryDirection === 'long'
           ? this.entryPrice * (1 - slPct / 100)
           : this.entryPrice * (1 + slPct / 100);
-        result['TP target'] = `$${this.rollingMean.toFixed(2)} (mean) | ${this.entryDirection === 'long' ? '+' : ''}${(((this.rollingMean / price) - 1) * 100).toFixed(2)}% away`;
-        result['SL price'] = `$${slPrice.toFixed(2)} (${slPct.toFixed(2)}% from entry)`;
+        result['TP target'] = `$${this.rollingMean.toFixed(2)} (mean) | ${this.entryDirection === 'long' ? '+' : ''}${(((this.rollingMean / price) - 1) * 100).toFixed(2)}% away | ${fmtPnl(this.rollingMean)}`;
+        result['SL price'] = `$${slPrice.toFixed(2)} (${slPct.toFixed(2)}% from entry) | ${fmtPnl(slPrice)}`;
         posLevels.sl = slPrice;
         posLevels.tp = this.rollingMean;
       } else {
@@ -711,7 +720,7 @@ export class RegimeStrategy implements BaseStrategy {
           ? this.entryPrice * (1 - HARD_SL_PCT / 100)
           : this.entryPrice * (1 + HARD_SL_PCT / 100);
 
-        result['SL price'] = `$${slPrice.toFixed(2)} (${HARD_SL_PCT}% from entry)`;
+        result['SL price'] = `$${slPrice.toFixed(2)} (${HARD_SL_PCT}% from entry) | ${fmtPnl(slPrice)}`;
         posLevels.sl = slPrice;
 
         if (holdSec < this.config.trailDelaySeconds) {
@@ -729,9 +738,7 @@ export class RegimeStrategy implements BaseStrategy {
             ? ((price - trailPrice) / price) * 100
             : ((trailPrice - price) / price) * 100;
 
-          const roe = favorable * LEVERAGE;
-          const portfolioPct = favorable * LEVERAGE * KELLY_FRACTION;
-          result['trail'] = `ACTIVE | best=${bestStr} trigger=$${trailPrice.toFixed(2)} (${trailPct.toFixed(2)}% from best) | ROE ${roe >= 0 ? '+' : ''}${roe.toFixed(1)}% | portfolio ${portfolioPct >= 0 ? '+' : ''}${portfolioPct.toFixed(2)}%`;
+          result['trail'] = `ACTIVE | best=${bestStr} trigger=$${trailPrice.toFixed(2)} (${trailPct.toFixed(2)}% from best) | ${fmtPnl(trailPrice)}`;
           result['trail margin'] = `${distToTrail.toFixed(2)}% from trigger`;
           posLevels.trail = trailPrice;
           posLevels.best = this.bestPriceSinceEntry;

@@ -126,7 +126,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
   .strat-metrics {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 8px;
     margin-bottom: 10px;
   }
@@ -612,8 +612,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       var statusStr = String(t.status || 'UNKNOWN');
       var statusClass = getStatusClass(t);
 
-      var pnlClass = m.netPnlSol > 0 ? 'pnl-pos' : m.netPnlSol < 0 ? 'pnl-neg' : 'pnl-zero';
-      var pnlSign = m.netPnlSol >= 0 ? '+' : '';
+      // Real Drift PnL (USDC) from per-strategy account data
+      var ps = lastAccount && lastAccount.perStrategy && lastAccount.perStrategy[e.name];
+      var pnlVal = ps ? ps.totalPnl : 0;
+      var pnlRoi = (ps && ps.startBalanceUsdc > 0) ? (ps.totalPnl / ps.startBalanceUsdc * 100) : 0;
+      var pnlClass = pnlVal > 0.005 ? 'pnl-pos' : pnlVal < -0.005 ? 'pnl-neg' : 'pnl-zero';
+      var pnlSign = pnlVal >= 0 ? '+' : '';
+      var roiSign = pnlRoi >= 0 ? '+' : '';
 
       html += '<div class="strat-card">'
         + '<div class="strat-header">'
@@ -621,7 +626,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         + '<span class="strat-status ' + statusClass + '">' + statusStr + '</span>'
         + '</div>'
         + '<div class="strat-metrics">'
-        + '<div class="metric"><div class="metric-label">PnL</div><div class="metric-value ' + pnlClass + '">' + pnlSign + m.netPnlSol.toFixed(4) + '</div></div>'
+        + '<div class="metric"><div class="metric-label">PnL</div><div class="metric-value ' + pnlClass + '">' + pnlSign + '$' + fmt(Math.abs(pnlVal), 2) + '</div></div>'
+        + '<div class="metric"><div class="metric-label">ROI</div><div class="metric-value ' + pnlClass + '">' + roiSign + fmt(Math.abs(pnlRoi), 2) + '%</div></div>'
         + '<div class="metric"><div class="metric-label">Trades</div><div class="metric-value">' + m.totalTrades + '</div></div>'
         + '<div class="metric"><div class="metric-label">Win Rate</div><div class="metric-value">' + m.winRate.toFixed(0) + '%</div></div>'
         + '<div class="metric"><div class="metric-label">Sharpe</div><div class="metric-value">' + m.sharpe.toFixed(2) + '</div></div>'
