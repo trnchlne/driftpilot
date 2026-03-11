@@ -98,8 +98,9 @@ export const STRATEGIES: StrategyConfig[] = [
   // #1: +55.3% ROI @30% Kelly, +35-45% @25% Kelly — 30m signal, ultra-wide stops, balanced regime
   // Fine-grid optimized: avg +158% ROI across 30-180d (10x lev, 30% Kelly, pure ATR trail)
   // Combined cross-parameter search: 4374 combos, all periods positive, avg Sharpe 0.213
-  // Key changes from prev: trail 0.8→0.7, sl 1.5→1.0, sig 4.0→4.5, win 30m→25m, trend 1.5→1.2, range 0.8→1.0
-  { type: 'regime', name: 'R-base',   atrPeriod: 90, regimeWindowSeconds: 4*3600, trendThreshold: 1.2, rangeThreshold: 1.0, signalWindowSeconds: 25*60, signalMultiple: 4.5, trailingAtrMultiple: 0.8, slAtrMultiple: 1.0, trailDelaySeconds: 300, meanWindowSeconds: 1*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, uncertainMultiple: 1.0 },
+  // Key changes from prev: trail 0.8→1.5, win 25m→40m (14d+30d grid: 70% WR, PF 4-5, MaxDD 4-7%, +40-68% ROI)
+  // Trending was bleeding at 29% WR with tight 0.8x trail + 25m window — wider trail lets winners run, 40m filters noise
+  { type: 'regime', name: 'R-base',   atrPeriod: 90, regimeWindowSeconds: 4*3600, trendThreshold: 1.2, rangeThreshold: 1.0, signalWindowSeconds: 40*60, signalMultiple: 4.5, trailingAtrMultiple: 1.5, slAtrMultiple: 1.0, trailDelaySeconds: 300, meanWindowSeconds: 1*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, uncertainMultiple: 1.0 },
   // Selective variant: trend-heavy regime, higher signal bar — fewer trades, better Sharpe
   { type: 'regime', name: 'R-sharp',  atrPeriod: 60, regimeWindowSeconds: 4*3600, trendThreshold: 1.0, rangeThreshold: 0.2, signalWindowSeconds: 30*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 480, meanWindowSeconds: 2*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 300, betSizeSol: 1.0 },
   // Fast ATR variant: 20m/5.0 signal, tight entry band, low reversion SL — differentiated from R-base
