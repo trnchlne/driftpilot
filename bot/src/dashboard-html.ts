@@ -192,7 +192,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     display: flex;
     gap: 10px;
   }
-  .trade-time { color: #5a5f73; min-width: 70px; }
+  .trade-time { color: #5a5f73; min-width: 120px; }
   .trade-name { color: #e2e5ed; min-width: 100px; font-weight: 500; }
   .trade-dir { min-width: 50px; font-weight: 600; }
   .trade-dir.long { color: #34d399; }
@@ -733,7 +733,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     }
     for (var i = 0; i < filtered.length; i++) {
       var t = filtered[i];
-      var time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
+      var d = new Date(t.timestamp);
+      var time = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 
       if (t.action === 'OPEN') {
         html += '<div class="trade-line">'
