@@ -366,6 +366,7 @@ export class DriftExecutor {
 
   /**
    * Read SOL-PERP market data: funding, OI, spread, liquidity.
+   * Uses BN string parsing to avoid overflow on large values.
    */
   readMarketData(): {
     fundingRate: number; fundingRate24h: number; spreadBps: number; markPrice: number;
@@ -374,30 +375,34 @@ export class DriftExecutor {
   } | null {
     try {
       const market = this.client.getPerpMarketAccount(SOL_PERP_MARKET_INDEX);
-      if (!market) return null;
+      if (!market) {
+        console.warn('[executor] readMarketData: no market account for SOL-PERP');
+        return null;
+      }
 
       const amm = market.amm;
       const oracleData = this.client.getOracleDataForPerpMarket(SOL_PERP_MARKET_INDEX);
       const oraclePrice = oracleData.price.toNumber() / 1e6; // PRICE_PRECISION
 
+      // Safe BN → number for potentially large values (avoids toNumber() overflow)
+      const bnToNum = (bn: BN, precision: number): number =>
+        parseFloat(bn.abs().toString()) / precision;
+
       // Funding rates (FUNDING_RATE_PRECISION = 1e9, value is proportion not %)
-      const FUNDING_PRECISION = 1e9;
-      const fundingRate = (amm.lastFundingRate.toNumber() / FUNDING_PRECISION) * 100;
-      const fundingRate24h = (amm.last24HAvgFundingRate.toNumber() / FUNDING_PRECISION) * 100;
+      const fundingRate = (parseFloat(amm.lastFundingRate.toString()) / 1e9) * 100;
+      const fundingRate24h = (parseFloat(amm.last24HAvgFundingRate.toString()) / 1e9) * 100;
 
       // Spread in basis points (BID_ASK_SPREAD_PRECISION = 1e6 = 100%)
-      const longSpread = amm.longSpread;
-      const shortSpread = amm.shortSpread;
-      const spreadBps = (longSpread + shortSpread) / 1e6 * 10000; // 1e6 = 100% → bps
+      const spreadBps = (amm.longSpread + amm.shortSpread) / 1e6 * 10000;
 
       // Open interest (BASE_PRECISION = 1e9)
-      const longOI = amm.baseAssetAmountLong.abs().toNumber() / 1e9;
-      const shortOI = amm.baseAssetAmountShort.abs().toNumber() / 1e9;
-      const maxOI = amm.maxOpenInterest.toNumber() / 1e9;
+      const longOI = bnToNum(amm.baseAssetAmountLong, 1e9);
+      const shortOI = bnToNum(amm.baseAssetAmountShort, 1e9);
+      const maxOI = bnToNum(amm.maxOpenInterest, 1e9);
 
       // Liquidity
-      const sqrtK = amm.sqrtK.toNumber() / 1e9;
-      const userLpShares = amm.userLpShares.toNumber() / 1e9;
+      const sqrtK = bnToNum(amm.sqrtK, 1e9);
+      const userLpShares = bnToNum(amm.userLpShares, 1e9);
 
       return {
         fundingRate,
@@ -412,7 +417,8 @@ export class DriftExecutor {
         usersWithPositions: market.numberOfUsersWithBase,
         totalUsers: market.numberOfUsers,
       };
-    } catch {
+    } catch (err) {
+      console.error('[executor] readMarketData failed:', err);
       return null;
     }
   }
