@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { DASHBOARD_HTML } from './dashboard-html.js';
 import { dashboardBus } from './dashboard-bus.js';
-import type { PriceEvent, EntryEvent, TradeEvent, LeaderboardEvent, AccountEvent } from './dashboard-bus.js';
+import type { PriceEvent, EntryEvent, TradeEvent, LeaderboardEvent, AccountEvent, MarketEvent } from './dashboard-bus.js';
 import type { PriceFeed } from './feed.js';
 import { decisionLog } from './decision-log.js';
 import type { DecisionType } from './decision-log.js';
@@ -53,6 +53,9 @@ export class DashboardServer {
     dashboardBus.on('account', (event: AccountEvent) => {
       this.lastAccount = event;
       this.broadcast('account', event);
+    });
+    dashboardBus.on('market', (event: MarketEvent) => {
+      this.broadcast('market', event);
     });
 
     this.server.listen(PORT, () => {

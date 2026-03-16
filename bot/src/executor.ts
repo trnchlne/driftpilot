@@ -343,6 +343,8 @@ export class DriftExecutor {
 
   /**
    * Read account balance for a subaccount (USDC values).
+   * Uses getNetUsdValue() for the true account value (no margin haircuts)
+   * so the dashboard matches Drift's UI.
    * Returns both total PnL (includes SOL spot appreciation) and
    * trading-only PnL (settledPerpPnl + unrealizedPerpPnl).
    */
@@ -351,7 +353,7 @@ export class DriftExecutor {
   } {
     try {
       const user = this.client.getUser(subAccountId);
-      const totalCollateral = user.getTotalCollateral().toNumber() / 1e6;
+      const totalCollateral = user.getNetUsdValue().toNumber() / 1e6;
       const unrealizedPnl = user.getUnrealizedPNL(true).toNumber() / 1e6;
       const allTimePnl = user.getTotalAllTimePnl().toNumber() / 1e6;
       const settledPerpPnl = user.getUserAccount().settledPerpPnl.toNumber() / 1e6;
@@ -359,6 +361,59 @@ export class DriftExecutor {
       return { totalCollateral, unrealizedPnl, allTimePnl, tradingPnl };
     } catch {
       return { totalCollateral: 0, unrealizedPnl: 0, allTimePnl: 0, tradingPnl: 0 };
+    }
+  }
+
+  /**
+   * Read SOL-PERP market data: funding, OI, spread, liquidity.
+   */
+  readMarketData(): {
+    fundingRate: number; fundingRate24h: number; spreadBps: number; markPrice: number;
+    longOI: number; shortOI: number; maxOI: number; sqrtK: number; userLpShares: number;
+    usersWithPositions: number; totalUsers: number;
+  } | null {
+    try {
+      const market = this.client.getPerpMarketAccount(SOL_PERP_MARKET_INDEX);
+      if (!market) return null;
+
+      const amm = market.amm;
+      const oracleData = this.client.getOracleDataForPerpMarket(SOL_PERP_MARKET_INDEX);
+      const oraclePrice = oracleData.price.toNumber() / 1e6; // PRICE_PRECISION
+
+      // Funding rates (FUNDING_RATE_PRECISION = 1e9, value is proportion not %)
+      const FUNDING_PRECISION = 1e9;
+      const fundingRate = (amm.lastFundingRate.toNumber() / FUNDING_PRECISION) * 100;
+      const fundingRate24h = (amm.last24HAvgFundingRate.toNumber() / FUNDING_PRECISION) * 100;
+
+      // Spread in basis points (BID_ASK_SPREAD_PRECISION = 1e6 = 100%)
+      const longSpread = amm.longSpread;
+      const shortSpread = amm.shortSpread;
+      const spreadBps = (longSpread + shortSpread) / 1e6 * 10000; // 1e6 = 100% → bps
+
+      // Open interest (BASE_PRECISION = 1e9)
+      const longOI = amm.baseAssetAmountLong.abs().toNumber() / 1e9;
+      const shortOI = amm.baseAssetAmountShort.abs().toNumber() / 1e9;
+      const maxOI = amm.maxOpenInterest.toNumber() / 1e9;
+
+      // Liquidity
+      const sqrtK = amm.sqrtK.toNumber() / 1e9;
+      const userLpShares = amm.userLpShares.toNumber() / 1e9;
+
+      return {
+        fundingRate,
+        fundingRate24h,
+        spreadBps,
+        markPrice: oraclePrice,
+        longOI,
+        shortOI,
+        maxOI,
+        sqrtK,
+        userLpShares,
+        usersWithPositions: market.numberOfUsersWithBase,
+        totalUsers: market.numberOfUsers,
+      };
+    } catch {
+      return null;
     }
   }
 

@@ -247,10 +247,12 @@ async function main(): Promise<void> {
   const feed = new PriceFeed();
   dashboard.setFeed(feed);
 
-  // Track SOL price + account balance
+  // Track SOL price + account balance + market data
   let lastSol = 0;
   let lastAccountEmit = 0;
+  let lastMarketEmit = 0;
   const ACCOUNT_EMIT_INTERVAL_MS = 30_000; // 30s
+  const MARKET_EMIT_INTERVAL_MS = 60_000;  // 60s
 
   feed.onTick((tick) => {
     arena.onTick(tick);
@@ -314,6 +316,15 @@ async function main(): Promise<void> {
           timestamp: now,
           perStrategy,
         });
+      }
+    }
+
+    // Emit market data periodically
+    if (now - lastMarketEmit >= MARKET_EMIT_INTERVAL_MS) {
+      lastMarketEmit = now;
+      const marketData = executor.readMarketData();
+      if (marketData) {
+        dashboardBus.emitMarket(marketData);
       }
     }
   });

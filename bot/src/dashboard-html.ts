@@ -205,6 +205,58 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .trade-size { color: #5a5f73; }
   .empty-msg { color: #3a3f53; font-style: italic; padding: 10px 0; }
 
+  /* Market insight panel */
+  .market-panel {
+    border-top: 1px solid #1e2536;
+    padding: 12px 16px;
+  }
+  .market-panel h2 {
+    font-size: 13px; color: #7a8099; text-transform: uppercase;
+    letter-spacing: 1px; margin-bottom: 10px;
+  }
+  .market-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+  }
+  .market-item {
+    background: #0f1420;
+    border: 1px solid #1e2536;
+    border-radius: 6px;
+    padding: 8px 12px;
+  }
+  .market-label {
+    color: #5a5f73;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+  }
+  .market-value {
+    color: #e2e5ed;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .market-sub {
+    color: #5a5f73;
+    font-size: 11px;
+    margin-top: 1px;
+  }
+  .market-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: #1e2536;
+    margin-top: 4px;
+    overflow: hidden;
+  }
+  .market-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s;
+  }
+  .funding-pos { color: #34d399; }
+  .funding-neg { color: #ef4444; }
+
   /* Tab bar */
   .tab-bar {
     display: flex;
@@ -284,6 +336,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     <h2>Activity Feed</h2>
     <div id="trades-feed">
       <div class="empty-msg">No trades yet...</div>
+    </div>
+  </div>
+
+  <div class="market-panel" id="market-panel">
+    <h2>SOL-PERP Market</h2>
+    <div id="market-content">
+      <div class="empty-msg">Waiting for market data...</div>
     </div>
   </div>
 </div>
@@ -777,6 +836,93 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
   /* ─── Connection ───────────────────────────── */
 
+  function renderMarket(d) {
+    var el = document.getElementById('market-content');
+    if (!el) return;
+
+    var fmtBN = function(v, dec) { return v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }); };
+    var fmtPct = function(v) { return (v >= 0 ? '+' : '') + v.toFixed(4) + '%'; };
+
+    // Funding: positive = longs pay shorts
+    var fundingCls = d.fundingRate >= 0 ? 'funding-pos' : 'funding-neg';
+    var funding24Cls = d.fundingRate24h >= 0 ? 'funding-pos' : 'funding-neg';
+    var annualizedPct = d.fundingRate * 24 * 365;
+
+    // OI capacity
+    var totalOI = d.longOI + d.shortOI;
+    var oiCapPct = d.maxOI > 0 ? (totalOI / d.maxOI * 100) : 0;
+    var oiBarColor = oiCapPct > 80 ? '#ef4444' : oiCapPct > 50 ? '#fbbf24' : '#34d399';
+
+    // Long/short skew
+    var longPct = totalOI > 0 ? (d.longOI / totalOI * 100) : 50;
+
+    // Spread color
+    var spreadCls = d.spreadBps > 5 ? 'funding-neg' : d.spreadBps > 2 ? '' : 'funding-pos';
+
+    var html = '<div class="market-grid">'
+      // Funding
+      + '<div class="market-item">'
+      + '<div class="market-label">Funding Rate (1h)</div>'
+      + '<div class="market-value ' + fundingCls + '">' + fmtPct(d.fundingRate) + '</div>'
+      + '<div class="market-sub">~' + (annualizedPct >= 0 ? '+' : '') + fmtBN(annualizedPct, 1) + '% APR</div>'
+      + '</div>'
+
+      // 24h avg funding
+      + '<div class="market-item">'
+      + '<div class="market-label">Avg Funding (24h)</div>'
+      + '<div class="market-value ' + funding24Cls + '">' + fmtPct(d.fundingRate24h) + '</div>'
+      + '<div class="market-sub">' + (d.fundingRate >= 0 ? 'Longs pay shorts' : 'Shorts pay longs') + '</div>'
+      + '</div>'
+
+      // Spread
+      + '<div class="market-item">'
+      + '<div class="market-label">Spread</div>'
+      + '<div class="market-value ' + spreadCls + '">' + fmtBN(d.spreadBps, 1) + ' bps</div>'
+      + '<div class="market-sub">$' + fmtBN(d.markPrice, 2) + ' mark</div>'
+      + '</div>'
+
+      // Open Interest
+      + '<div class="market-item">'
+      + '<div class="market-label">Open Interest</div>'
+      + '<div class="market-value">' + fmtBN(totalOI, 0) + ' SOL</div>'
+      + '<div class="market-sub">$' + fmtBN(totalOI * d.markPrice / 1e6, 1) + 'M notional</div>'
+      + '</div>'
+
+      // Long/Short ratio
+      + '<div class="market-item">'
+      + '<div class="market-label">Long / Short</div>'
+      + '<div class="market-value">' + fmtBN(d.longOI, 0) + ' / ' + fmtBN(d.shortOI, 0) + '</div>'
+      + '<div class="market-bar"><div class="market-bar-fill" style="width:' + longPct.toFixed(1) + '%;background:linear-gradient(90deg,#34d399 0%,#34d399 50%,#ef4444 50%,#ef4444 100%)"></div></div>'
+      + '<div class="market-sub">' + longPct.toFixed(1) + '% long</div>'
+      + '</div>'
+
+      // OI capacity
+      + '<div class="market-item">'
+      + '<div class="market-label">OI Capacity</div>'
+      + '<div class="market-value">' + fmtBN(oiCapPct, 1) + '%</div>'
+      + '<div class="market-bar"><div class="market-bar-fill" style="width:' + Math.min(oiCapPct, 100).toFixed(1) + '%;background:' + oiBarColor + '"></div></div>'
+      + '<div class="market-sub">Max ' + fmtBN(d.maxOI, 0) + ' SOL</div>'
+      + '</div>'
+
+      // Liquidity depth
+      + '<div class="market-item">'
+      + '<div class="market-label">AMM Depth (sqrtK)</div>'
+      + '<div class="market-value">' + fmtBN(d.sqrtK, 0) + '</div>'
+      + '<div class="market-sub">' + fmtBN(d.userLpShares, 0) + ' user LP shares</div>'
+      + '</div>'
+
+      // Users
+      + '<div class="market-item">'
+      + '<div class="market-label">Active Traders</div>'
+      + '<div class="market-value">' + fmtBN(d.usersWithPositions, 0) + '</div>'
+      + '<div class="market-sub">' + fmtBN(d.totalUsers, 0) + ' total users</div>'
+      + '</div>'
+
+      + '</div>';
+
+    el.innerHTML = html;
+  }
+
   function setConnection(state) {
     var el = document.getElementById('connection');
     var text = el.querySelector('.conn-text');
@@ -825,6 +971,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     es.addEventListener('account', function(e) {
       lastAccount = JSON.parse(e.data);
       renderAccountBar();
+    });
+
+    es.addEventListener('market', function(e) {
+      renderMarket(JSON.parse(e.data));
     });
 
     es.onerror = function() {

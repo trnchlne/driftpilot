@@ -57,6 +57,20 @@ export interface SubAccountPnl {
   tradingPnl: number;
 }
 
+export interface MarketEvent {
+  fundingRate: number;      // hourly funding rate %
+  fundingRate24h: number;   // 24h avg funding rate %
+  spreadBps: number;        // bid-ask spread in basis points
+  markPrice: number;        // current mark price
+  longOI: number;           // long open interest in SOL
+  shortOI: number;          // short open interest in SOL
+  maxOI: number;            // max allowed OI in SOL
+  sqrtK: number;            // AMM liquidity depth
+  userLpShares: number;     // user-provided LP shares
+  usersWithPositions: number;
+  totalUsers: number;
+}
+
 export interface AccountEvent {
   balanceUsdc: number;
   unrealizedPnl: number;
@@ -114,6 +128,10 @@ class DashboardBus extends EventEmitter {
 
   emitAccount(event: AccountEvent): void {
     this.emit('account', event);
+  }
+
+  emitMarket(event: MarketEvent): void {
+    this.emit('market', event);
   }
 
   shutdown(): void {
