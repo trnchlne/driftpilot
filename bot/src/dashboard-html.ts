@@ -102,23 +102,22 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     padding: 16px;
     overflow-y: auto;
     display: grid;
-    grid-template-columns: 1fr;
-    gap: 16px;
-    max-width: 800px;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 12px;
   }
 
   .strat-card {
     background: #0f1420;
     border: 1px solid #1e2536;
     border-radius: 6px;
-    padding: 12px 16px;
+    padding: 10px 14px;
   }
   .strat-header {
     display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
-  .strat-name { color: #e2e5ed; font-weight: 600; font-size: 14px; }
-  .strat-status { font-weight: 600; font-size: 12px; }
+  .strat-name { color: #e2e5ed; font-weight: 600; font-size: 13px; }
+  .strat-status { font-weight: 600; font-size: 11px; }
   .strat-status.scanning { color: #60a5fa; }
   .strat-status.holding { color: #fbbf24; }
   .strat-status.cooldown { color: #7a8099; }
@@ -126,27 +125,27 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
   .strat-metrics {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 8px;
-    margin-bottom: 10px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    margin-bottom: 8px;
   }
   .metric { text-align: center; }
-  .metric-label { color: #5a5f73; font-size: 10px; text-transform: uppercase; }
-  .metric-value { color: #e2e5ed; font-weight: 600; font-size: 14px; }
+  .metric-label { color: #5a5f73; font-size: 9px; text-transform: uppercase; }
+  .metric-value { color: #e2e5ed; font-weight: 600; font-size: 13px; }
 
   .strat-thinking {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 4px 12px;
-    font-size: 12px;
+    gap: 2px 10px;
+    font-size: 11px;
   }
   .think-item {
     display: flex;
     justify-content: space-between;
-    gap: 6px;
+    gap: 4px;
   }
-  .think-key { color: #5a5f73; }
-  .think-val { color: #a5aac0; font-weight: 500; text-align: right; }
+  .think-key { color: #5a5f73; font-size: 10px; }
+  .think-val { color: #a5aac0; font-weight: 500; text-align: right; font-size: 10px; }
   .pnl-pos { color: #34d399; }
   .pnl-neg { color: #ef4444; }
   .pnl-zero { color: #5a5f73; }
@@ -154,26 +153,6 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .think-warn { color: #f59e0b; font-weight: 600; }
   .think-last { color: #c5c8d4; }
   .think-last-detail { color: #7a8099; font-style: italic; }
-
-  .strat-explainer {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid #1e2536;
-    font-size: 11px;
-    line-height: 1.6;
-    color: #5a5f73;
-  }
-  .strat-explainer strong { color: #7a8099; font-weight: 600; }
-  .strat-explainer .ex-section {
-    margin-bottom: 6px;
-  }
-  .ex-label {
-    color: #7a8099;
-    font-weight: 600;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
 
   /* Trades feed */
   .trades {
@@ -719,56 +698,6 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         } else {
           html += '<div class="think-item"><span class="think-key">' + key + '</span><span class="' + valClass + '">' + t[key] + '</span></div>';
         }
-      }
-
-      html += '</div>';
-
-      // Explainer text
-      var regime = String(t.regime || '');
-      var statusStr2 = String(t.status || '');
-      var isHolding = statusStr2.indexOf('TRD') >= 0 || statusStr2.indexOf('REV') >= 0;
-
-      html += '<div class="strat-explainer">';
-
-      if (isHolding) {
-        if (statusStr2.indexOf('TRD') >= 0) {
-          html += '<div class="ex-section"><span class="ex-label">What is happening</span><br>'
-            + 'In a <strong>trend trade</strong>. The bot detected a strong price move in the 30m signal window that aligned with the 4h trend direction, and entered a position.</div>'
-            + '<div class="ex-section"><span class="ex-label">How it exits</span><br>'
-            + '<strong>Trailing stop</strong> follows the best price at a distance based on volatility (ATR). '
-            + 'If price reverses too far from the best, the trade closes with profit. '
-            + '<strong>Hard SL</strong> closes the trade if price moves against entry beyond the stop-loss level.</div>';
-        } else {
-          html += '<div class="ex-section"><span class="ex-label">What is happening</span><br>'
-            + 'In a <strong>mean-reversion trade</strong>. The market is ranging and price deviated far from the 2h average. The bot entered expecting price to return to the mean.</div>'
-            + '<div class="ex-section"><span class="ex-label">How it exits</span><br>'
-            + '<strong>Take profit</strong> when price returns to the rolling mean (blue line on chart). '
-            + '<strong>Hard SL</strong> if price keeps moving away from the mean.</div>';
-        }
-      } else {
-        html += '<div class="ex-section"><span class="ex-label">How this strategy works</span><br>'
-          + 'Classifies the market every tick using 4h of price data into <strong>Trending</strong>, <strong>Ranging</strong>, or <strong>Uncertain</strong>.</div>';
-
-        if (regime.indexOf('TRENDING') >= 0) {
-          html += '<div class="ex-section"><span class="ex-label">Current mode: Trending</span><br>'
-            + 'Looking for a strong 30m price move <strong>in the direction of the 4h trend</strong>. '
-            + 'The green/red dashed lines on the chart show where price needs to reach for an entry. '
-            + 'Exits use a trailing stop that locks in profit as price extends.</div>';
-        } else if (regime.indexOf('RANGING') >= 0) {
-          html += '<div class="ex-section"><span class="ex-label">Current mode: Ranging</span><br>'
-            + 'Market is moving sideways. Looking for price to <strong>deviate far from the 2h mean</strong> (blue line). '
-            + 'If price hits the green line, it goes long expecting a bounce back to the mean. '
-            + 'If price hits the red line, it goes short. Exits when price returns to the mean.</div>';
-        } else {
-          html += '<div class="ex-section"><span class="ex-label">Current mode: Uncertain</span><br>'
-            + 'Market does not clearly fit trending or ranging. Using <strong>stricter entry rules</strong> (1.5x higher threshold) '
-            + 'and tighter stops. Trades in either direction if the signal is strong enough.</div>';
-        }
-
-        html += '<div class="ex-section"><span class="ex-label">Key terms</span><br>'
-          + '<strong>ATR%</strong> = average price change per minute (volatility). All thresholds and stops scale with this. '
-          + '<strong>Signal %</strong> = how much price moved in the signal window vs what is needed to enter. '
-          + '<strong>Cooldown</strong> = mandatory wait between trades to avoid overtrading.</div>';
       }
 
       html += '</div></div>';
