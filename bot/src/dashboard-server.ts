@@ -107,9 +107,13 @@ export class DashboardServer {
       unrealizedPnl: this.lastAccount.unrealizedPnl,
       realizedPnl: this.lastAccount.realizedPnl,
       totalPnl: this.lastAccount.totalPnl,
+      tradingPnl: this.lastAccount.tradingPnl ?? 0,
       depositUsdc: this.lastAccount.startBalanceUsdc,
       roi: this.lastAccount.startBalanceUsdc > 0
         ? ((this.lastAccount.totalPnl / this.lastAccount.startBalanceUsdc) * 100)
+        : 0,
+      tradingRoi: this.lastAccount.startBalanceUsdc > 0
+        ? (((this.lastAccount.tradingPnl ?? 0) / this.lastAccount.startBalanceUsdc) * 100)
         : 0,
       perStrategy: this.lastAccount.perStrategy ?? null,
       lastUpdate: new Date(this.lastAccount.timestamp * 1000).toISOString(),

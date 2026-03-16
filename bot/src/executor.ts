@@ -67,6 +67,23 @@ export class DriftExecutor {
       // 1. Switch to subaccount
       await this.client.switchActiveUser(subAccountId);
 
+      // 1b. Guard: check for stale position from a failed close
+      let priorBaseAmount = new BN(0);
+      try {
+        const user = this.client.getUser(subAccountId);
+        const position = user.getPerpPosition(SOL_PERP_MARKET_INDEX);
+        if (position) {
+          priorBaseAmount = position.baseAssetAmount;
+          if (!position.baseAssetAmount.isZero()) {
+            console.error(
+              `[executor] STALE POSITION DETECTED sub=${subAccountId} (${stratName}) ` +
+              `size=${position.baseAssetAmount.toNumber() / 1e9} SOL — aborting open to prevent double exposure`,
+            );
+            return; // filled stays false → LiveTrader will unwind paper
+          }
+        }
+      } catch { /* clean start assumed */ }
+
       if (useMarketOrder) {
         // ── Market order (taker) — guaranteed fill for trending entries ──
         const entryParams = getMarketOrderParams({
@@ -79,7 +96,7 @@ export class DriftExecutor {
         console.log(`[executor] MARKET ${direction.toUpperCase()} ${sizeSol} SOL sub=${subAccountId} (${stratName}) tx=${entryTx}`);
 
         // Market orders fill immediately — brief poll to confirm
-        filled = await this.waitForFill(subAccountId, baseAmount);
+        filled = await this.waitForFill(subAccountId, priorBaseAmount);
         if (!filled) {
           console.log(`[executor] MARKET ORDER NOT FILLED — unexpected (${stratName})`);
           try {
@@ -110,7 +127,7 @@ export class DriftExecutor {
         console.log(`[executor] LIMIT ${direction.toUpperCase()} ${sizeSol} SOL @ oracle sub=${subAccountId} (${stratName}) tx=${entryTx}`);
 
         // Poll for fill
-        filled = await this.waitForFill(subAccountId, baseAmount);
+        filled = await this.waitForFill(subAccountId, priorBaseAmount);
 
         if (!filled) {
           console.log(`[executor] LIMIT EXPIRED — entry skipped (${stratName})`);
@@ -153,17 +170,19 @@ export class DriftExecutor {
   }
 
   /**
-   * Poll until the user has a non-zero position (limit order filled)
+   * Poll until position size changes from pre-order snapshot (order filled)
    * or until timeout (order expired unfilled).
    */
-  private async waitForFill(subAccountId: number, expectedBase: BN): Promise<boolean> {
+  private async waitForFill(subAccountId: number, priorBaseAmount: BN): Promise<boolean> {
     const start = Date.now();
     while (Date.now() - start < FILL_POLL_MAX_WAIT_MS) {
       try {
         const user = this.client.getUser(subAccountId);
         const position = user.getPerpPosition(SOL_PERP_MARKET_INDEX);
-        if (position && !position.baseAssetAmount.isZero()) {
-          return true; // position exists → filled
+        const currentBase = position ? position.baseAssetAmount : new BN(0);
+        // Position size changed from pre-order snapshot → order filled
+        if (!currentBase.eq(priorBaseAmount)) {
+          return true;
         }
       } catch { /* ignore read errors during polling */ }
       await new Promise((r) => setTimeout(r, FILL_POLL_INTERVAL_MS));
@@ -172,7 +191,8 @@ export class DriftExecutor {
   }
 
   /**
-   * Close a position: cancel SL trigger + market close.
+   * Close a position: cancel SL trigger + market close + verify.
+   * Retries once if position remains after the first close attempt.
    */
   async close(stratName: string, subAccountId: number): Promise<void> {
     await this.withMutex(async () => {
@@ -218,7 +238,46 @@ export class DriftExecutor {
       const tx = await this.client.placePerpOrder(closeParams);
       console.log(`[executor] CLOSE sub=${subAccountId} (${stratName}) tx=${tx}`);
 
-      // 5. Clear state
+      // 5. Verify close — retry once if position still exists
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const userAfter = this.client.getUser(subAccountId);
+        const posAfter = userAfter.getPerpPosition(SOL_PERP_MARKET_INDEX);
+        if (posAfter && !posAfter.baseAssetAmount.isZero()) {
+          const remainingSize = posAfter.baseAssetAmount.abs().toNumber() / 1e9;
+          console.error(
+            `[executor] CLOSE INCOMPLETE sub=${subAccountId} (${stratName}) — ` +
+            `${remainingSize.toFixed(4)} SOL remaining, retrying...`,
+          );
+          const retryDir = posAfter.baseAssetAmount.gt(new BN(0))
+            ? PositionDirection.SHORT
+            : PositionDirection.LONG;
+          const retryParams = getMarketOrderParams({
+            marketIndex: SOL_PERP_MARKET_INDEX,
+            direction: retryDir,
+            baseAssetAmount: posAfter.baseAssetAmount.abs(),
+            reduceOnly: true,
+          });
+          const retryTx = await this.client.placePerpOrder(retryParams);
+          console.log(`[executor] RETRY CLOSE sub=${subAccountId} (${stratName}) tx=${retryTx}`);
+
+          // Final check after retry
+          await new Promise(r => setTimeout(r, 2000));
+          const userFinal = this.client.getUser(subAccountId);
+          const posFinal = userFinal.getPerpPosition(SOL_PERP_MARKET_INDEX);
+          if (posFinal && !posFinal.baseAssetAmount.isZero()) {
+            const ghostSize = posFinal.baseAssetAmount.abs().toNumber() / 1e9;
+            console.error(
+              `[executor] *** GHOST POSITION *** sub=${subAccountId} (${stratName}) — ` +
+              `${ghostSize.toFixed(4)} SOL still open after 2 close attempts! Manual intervention needed.`,
+            );
+          }
+        }
+      } catch (err) {
+        console.error(`[executor] Close verification failed sub=${subAccountId} (${stratName}):`, err);
+      }
+
+      // 6. Clear state
       this.stateManager.clear(stratName);
     });
   }
@@ -284,16 +343,22 @@ export class DriftExecutor {
 
   /**
    * Read account balance for a subaccount (USDC values).
+   * Returns both total PnL (includes SOL spot appreciation) and
+   * trading-only PnL (settledPerpPnl + unrealizedPerpPnl).
    */
-  readAccountBalance(subAccountId: number): { totalCollateral: number; unrealizedPnl: number; allTimePnl: number } {
+  readAccountBalance(subAccountId: number): {
+    totalCollateral: number; unrealizedPnl: number; allTimePnl: number; tradingPnl: number;
+  } {
     try {
       const user = this.client.getUser(subAccountId);
       const totalCollateral = user.getTotalCollateral().toNumber() / 1e6;
       const unrealizedPnl = user.getUnrealizedPNL(true).toNumber() / 1e6;
       const allTimePnl = user.getTotalAllTimePnl().toNumber() / 1e6;
-      return { totalCollateral, unrealizedPnl, allTimePnl };
+      const settledPerpPnl = user.getUserAccount().settledPerpPnl.toNumber() / 1e6;
+      const tradingPnl = settledPerpPnl + unrealizedPnl;
+      return { totalCollateral, unrealizedPnl, allTimePnl, tradingPnl };
     } catch {
-      return { totalCollateral: 0, unrealizedPnl: 0, allTimePnl: 0 };
+      return { totalCollateral: 0, unrealizedPnl: 0, allTimePnl: 0, tradingPnl: 0 };
     }
   }
 

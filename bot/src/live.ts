@@ -274,18 +274,20 @@ async function main(): Promise<void> {
       let totalCollateral = 0;
       let unrealizedPnl = 0;
       let allTimePnl = 0;
+      let tradingPnl = 0;
 
       // Per-subaccount balances (dedup since multiple strategies may share a sub)
-      const subBalances: Record<number, { totalCollateral: number; unrealizedPnl: number; allTimePnl: number }> = {};
+      const subBalances: Record<number, { totalCollateral: number; unrealizedPnl: number; allTimePnl: number; tradingPnl: number }> = {};
       for (const subId of activeSubAccountIds) {
         subBalances[subId] = executor.readAccountBalance(subId);
         totalCollateral += subBalances[subId].totalCollateral;
         unrealizedPnl += subBalances[subId].unrealizedPnl;
         allTimePnl += subBalances[subId].allTimePnl;
+        tradingPnl += subBalances[subId].tradingPnl;
       }
 
       // Build per-strategy breakdown
-      const perStrategy: Record<string, { balanceUsdc: number; unrealizedPnl: number; startBalanceUsdc: number; realizedPnl: number; totalPnl: number }> = {};
+      const perStrategy: Record<string, { balanceUsdc: number; unrealizedPnl: number; startBalanceUsdc: number; realizedPnl: number; totalPnl: number; tradingPnl: number }> = {};
       for (const [stratName, subId] of Object.entries(activeSubAccountMap)) {
         const sb = subBalances[subId];
         if (sb) {
@@ -295,6 +297,7 @@ async function main(): Promise<void> {
             startBalanceUsdc: sb.totalCollateral - sb.allTimePnl,
             realizedPnl: sb.allTimePnl - sb.unrealizedPnl,
             totalPnl: sb.allTimePnl,
+            tradingPnl: sb.tradingPnl,
           };
         }
       }
@@ -307,6 +310,7 @@ async function main(): Promise<void> {
           startBalanceUsdc: totalCollateral - allTimePnl,
           realizedPnl,
           totalPnl: allTimePnl,
+          tradingPnl,
           timestamp: now,
           perStrategy,
         });

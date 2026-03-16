@@ -263,7 +263,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="acct-item"><div class="acct-label" id="acct-realized-label">Realized P&L</div><div class="acct-value" id="acct-realized">--</div></div>
   <div class="acct-item"><div class="acct-label" id="acct-unrealized-label">Unrealized P&L</div><div class="acct-value" id="acct-unrealized">--</div></div>
   <div class="acct-item"><div class="acct-label" id="acct-total-label">Total P&L</div><div class="acct-value" id="acct-total">--</div></div>
-  <div class="acct-item"><div class="acct-label" id="acct-roi-label">ROI</div><div class="acct-value" id="acct-roi">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-roi-label">ROI (total)</div><div class="acct-value" id="acct-roi">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-trading-roi-label">ROI (trading)</div><div class="acct-value" id="acct-trading-roi">--</div></div>
 </div>
 
 <div class="tab-bar" id="tab-bar"></div>
@@ -517,6 +518,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     var realized = d.realizedPnl;
     var unrealized = d.unrealizedPnl;
     var total = d.totalPnl;
+    var trading = d.tradingPnl || 0;
 
     // Per-strategy USDC data when a strategy tab is selected
     var stratLabel = '';
@@ -527,6 +529,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       realized = ps.realizedPnl;
       unrealized = ps.unrealizedPnl;
       total = ps.totalPnl;
+      trading = ps.tradingPnl || 0;
       stratLabel = ' (' + activeTab + ')';
     }
 
@@ -535,7 +538,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     document.getElementById('acct-realized-label').textContent = 'Realized P&L' + stratLabel;
     document.getElementById('acct-unrealized-label').textContent = 'Unrealized P&L' + stratLabel;
     document.getElementById('acct-total-label').textContent = 'Total P&L' + stratLabel;
-    document.getElementById('acct-roi-label').textContent = 'ROI' + stratLabel;
+    document.getElementById('acct-roi-label').textContent = 'ROI (total)' + stratLabel;
+    document.getElementById('acct-trading-roi-label').textContent = 'ROI (trading)' + stratLabel;
 
     var realEl = document.getElementById('acct-realized');
     realEl.textContent = sign(realized) + '$' + fmt(Math.abs(realized), 2);
@@ -550,6 +554,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     var roiPct = start > 0 ? (total / start) * 100 : 0;
     roiEl.textContent = sign(roiPct) + fmt(Math.abs(roiPct), 2) + '%';
     roiEl.className = 'acct-value ' + cls(roiPct);
+    var tradingRoiEl = document.getElementById('acct-trading-roi');
+    var tradingRoiPct = start > 0 ? (trading / start) * 100 : 0;
+    tradingRoiEl.textContent = sign(tradingRoiPct) + fmt(Math.abs(tradingRoiPct), 2) + '%';
+    tradingRoiEl.className = 'acct-value ' + cls(tradingRoiPct);
   }
 
   window._setTab = function(name) {
@@ -615,10 +623,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       // Real Drift PnL (USDC) from per-strategy account data
       var ps = lastAccount && lastAccount.perStrategy && lastAccount.perStrategy[e.name];
       var pnlVal = ps ? ps.totalPnl : 0;
+      var tradingVal = ps ? (ps.tradingPnl || 0) : 0;
       var pnlRoi = (ps && ps.startBalanceUsdc > 0) ? (ps.totalPnl / ps.startBalanceUsdc * 100) : 0;
+      var tradingRoi = (ps && ps.startBalanceUsdc > 0) ? (tradingVal / ps.startBalanceUsdc * 100) : 0;
       var pnlClass = pnlVal > 0.005 ? 'pnl-pos' : pnlVal < -0.005 ? 'pnl-neg' : 'pnl-zero';
+      var tradingClass = tradingVal > 0.005 ? 'pnl-pos' : tradingVal < -0.005 ? 'pnl-neg' : 'pnl-zero';
       var pnlSign = pnlVal >= 0 ? '+' : '';
-      var roiSign = pnlRoi >= 0 ? '+' : '';
+      var tradingSign = tradingVal >= 0 ? '+' : '';
 
       html += '<div class="strat-card">'
         + '<div class="strat-header">'
@@ -626,8 +637,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         + '<span class="strat-status ' + statusClass + '">' + statusStr + '</span>'
         + '</div>'
         + '<div class="strat-metrics">'
-        + '<div class="metric"><div class="metric-label">PnL</div><div class="metric-value ' + pnlClass + '">' + pnlSign + '$' + fmt(Math.abs(pnlVal), 2) + '</div></div>'
-        + '<div class="metric"><div class="metric-label">ROI</div><div class="metric-value ' + pnlClass + '">' + roiSign + fmt(Math.abs(pnlRoi), 2) + '%</div></div>'
+        + '<div class="metric"><div class="metric-label">PnL (total)</div><div class="metric-value ' + pnlClass + '">' + pnlSign + '$' + fmt(Math.abs(pnlVal), 2) + '</div></div>'
+        + '<div class="metric"><div class="metric-label">PnL (trading)</div><div class="metric-value ' + tradingClass + '">' + tradingSign + '$' + fmt(Math.abs(tradingVal), 2) + '</div></div>'
+        + '<div class="metric"><div class="metric-label">ROI (trading)</div><div class="metric-value ' + tradingClass + '">' + tradingSign + fmt(Math.abs(tradingRoi), 2) + '%</div></div>'
         + '<div class="metric"><div class="metric-label">Trades</div><div class="metric-value">' + m.totalTrades + '</div></div>'
         + '<div class="metric"><div class="metric-label">Win Rate</div><div class="metric-value">' + m.winRate.toFixed(0) + '%</div></div>'
         + '<div class="metric"><div class="metric-label">Sharpe</div><div class="metric-value">' + m.sharpe.toFixed(2) + '</div></div>'

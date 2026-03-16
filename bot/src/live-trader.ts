@@ -23,6 +23,7 @@ export class LiveTrader extends PaperTrader {
   private lastEntryPrice = 0;
   private lastEntryTickTime = 0;
   private _useMarketEntry = false;
+  private _pendingClose = false;
 
   constructor(opts: {
     strategyName: string;
@@ -48,6 +49,12 @@ export class LiveTrader extends PaperTrader {
     feeRate: number,
     time?: number,
   ): void {
+    // Block opens while a previous close is still settling on Drift
+    if (this._pendingClose) {
+      console.warn(`[live-trader] BLOCKED OPEN — close still pending on Drift (${this.strategyName})`);
+      return;
+    }
+
     // Paper side first (synchronous)
     super.openPaper(direction, price, sizeSol, feeRate, time);
 
@@ -103,11 +110,18 @@ export class LiveTrader extends PaperTrader {
     // Paper side first (synchronous)
     const trade = super.closePaper(price, feeRate, time);
 
-    // Fire Drift close async
+    // Block new opens until Drift close settles
+    this._pendingClose = true;
+
+    // Fire Drift close async (with retry + verification in executor)
     this.executor
       .close(this.strategyName, this.subAccountId)
+      .then(() => {
+        this._pendingClose = false;
+      })
       .catch((err) => {
         console.error(`[live-trader] DRIFT CLOSE FAILED ${this.strategyName}:`, err);
+        this._pendingClose = false;
       });
 
     return trade;

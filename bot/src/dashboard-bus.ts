@@ -54,6 +54,7 @@ export interface SubAccountPnl {
   startBalanceUsdc: number;
   realizedPnl: number;
   totalPnl: number;
+  tradingPnl: number;
 }
 
 export interface AccountEvent {
@@ -62,6 +63,7 @@ export interface AccountEvent {
   startBalanceUsdc: number;
   realizedPnl: number;
   totalPnl: number;
+  tradingPnl: number;
   timestamp: number;
   perStrategy?: Record<string, SubAccountPnl>;
 }
