@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 export interface PriceEvent {
   sol: number;
   timestamp: number;
+  prices?: Record<string, number>; // per-market prices (e.g. { SOL: 89.5, HYPE: 41.2 })
 }
 
 export interface EntryEvent {

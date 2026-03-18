@@ -292,20 +292,29 @@ async function main(): Promise<void> {
   const feed = new PriceFeed(uniqueFeedIds);
   dashboard.setFeed(feed);
 
-  // Track SOL price + account balance + market data
+  // Track prices + account balance + market data
   let lastSol = 0;
+  const marketPrices: Record<string, number> = {}; // symbol → last price
   let lastAccountEmit = 0;
   let lastMarketEmit = 0;
   const ACCOUNT_EMIT_INTERVAL_MS = 30_000; // 30s
   const MARKET_EMIT_INTERVAL_MS = 60_000;  // 60s
 
-  // SOL feed ID for dashboard price display
+  // Build feedId → market symbol lookup
   const SOL_FEED_ID = MARKETS.SOL.feedId;
+  const feedIdToSymbol: Record<string, string> = {};
+  for (const [sym, mkt] of Object.entries(MARKETS)) {
+    if (feedIdSet.has(mkt.feedId)) feedIdToSymbol[mkt.feedId] = sym;
+  }
 
   feed.onTick((tick) => {
     arena.onTick(tick);
 
-    // Use SOL price for dashboard display and bankroll SOL conversion
+    // Track per-market prices
+    const sym = feedIdToSymbol[tick.feedId];
+    if (sym) marketPrices[sym] = tick.price;
+
+    // Use SOL price for bankroll SOL conversion
     if (tick.feedId === SOL_FEED_ID) {
       lastSol = tick.price;
       for (const bm of bankrolls) {
@@ -314,9 +323,11 @@ async function main(): Promise<void> {
           console.error('[live] Bankroll refresh failed:', err);
         });
       }
-      if (lastSol > 0) {
-        dashboardBus.emitPrice({ sol: lastSol, timestamp: Date.now() });
-      }
+    }
+
+    // Emit price event with all market prices (throttled by dashboardBus)
+    if (lastSol > 0) {
+      dashboardBus.emitPrice({ sol: lastSol, timestamp: Date.now(), prices: { ...marketPrices } });
     }
 
     // Emit account balance periodically (aggregate all active subaccounts)

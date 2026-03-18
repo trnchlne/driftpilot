@@ -301,7 +301,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
 <div class="main">
   <div class="chart-container">
-    <h2>SOL/USD <span id="chart-price" style="color:#e2e5ed;font-size:16px;font-weight:700;margin-left:8px">--</span></h2>
+    <h2><span id="chart-market">SOL</span>/USD <span id="chart-price" style="color:#e2e5ed;font-size:16px;font-weight:700;margin-left:8px">--</span></h2>
     <div class="chart-info" id="chart-legend"></div>
     <canvas id="chart"></canvas>
   </div>
@@ -330,12 +330,15 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   var MAX_CHART_POINTS = 600; // ~10 minutes at 1/sec
   var MAX_TRADES = 50;
   var priceHistory = [];
+  var marketPriceHistories = {}; // { SOL: [...], HYPE: [...] }
   var trades = [];
   var currentLevels = null;
   var currentRegime = '';
   var prevSol = 0;
   var activeTab = 'all';
+  var activeMarket = 'SOL';
   var strategyStates = {};
+  var strategyMarkets = {}; // name → market symbol
   var lastLeaderboard = null;
   var lastAccount = null;
 
@@ -367,7 +370,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
     ctx.clearRect(0, 0, w, h);
 
-    if (priceHistory.length < 2) {
+    // Use the active market's price history (fallback to SOL/legacy)
+    var chartPrices = marketPriceHistories[activeMarket] || priceHistory;
+    if (chartPrices.length < 2) {
       ctx.fillStyle = '#3a3f53';
       ctx.font = '12px monospace';
       ctx.fillText('Waiting for price data...', w / 2 - 80, h / 2);
@@ -375,7 +380,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     }
 
     // Determine Y range from prices + levels
-    var prices = priceHistory.map(function(p) { return p.price; });
+    var prices = chartPrices.map(function(p) { return p.price; });
     var allValues = prices.slice();
     if (currentLevels) {
       var lvlKeys = ['mean', 'entryLong', 'entryShort', 'sl', 'tp', 'trail', 'entry', 'best'];
@@ -394,14 +399,14 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     range = maxP - minP;
 
     // Time range
-    var firstTime = priceHistory[0].time;
-    var lastTime = priceHistory[priceHistory.length - 1].time;
+    var firstTime = chartPrices[0].time;
+    var lastTime = chartPrices[chartPrices.length - 1].time;
     var timeSpanMs = lastTime - firstTime;
 
     function yPos(price) { return pad.top + ch - ((price - minP) / range * ch); }
     function xPos(i) {
       if (timeSpanMs <= 0) return pad.left;
-      return pad.left + ((priceHistory[i].time - firstTime) / timeSpanMs) * cw;
+      return pad.left + ((chartPrices[i].time - firstTime) / timeSpanMs) * cw;
     }
 
     // Grid lines
@@ -501,17 +506,17 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     ctx.beginPath();
     ctx.strokeStyle = '#e2e5ed';
     ctx.lineWidth = 1.5;
-    for (var i = 0; i < priceHistory.length; i++) {
+    for (var i = 0; i < chartPrices.length; i++) {
       var px = xPos(i);
-      var py = yPos(priceHistory[i].price);
+      var py = yPos(chartPrices[i].price);
       if (i === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     }
     ctx.stroke();
 
     // Current price dot
-    var lastP = priceHistory[priceHistory.length - 1];
-    var lx = xPos(priceHistory.length - 1);
+    var lastP = chartPrices[chartPrices.length - 1];
+    var lx = xPos(chartPrices.length - 1);
     var ly = yPos(lastP.price);
     ctx.beginPath();
     ctx.arc(lx, ly, 3, 0, Math.PI * 2);
@@ -532,6 +537,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   function buildTabs(entries) {
     for (var i = 0; i < entries.length; i++) {
       strategyStates[entries[i].name] = getStatusClass(entries[i].thinking || {});
+      if (entries[i].market) strategyMarkets[entries[i].name] = entries[i].market;
     }
     var bar = document.getElementById('tab-bar');
     var html = '<button class="tab' + (activeTab === 'all' ? ' active' : '') + '" onclick="window._setTab(\\'all\\')">All</button>';
@@ -599,9 +605,17 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
   window._setTab = function(name) {
     activeTab = name;
+    // Switch chart to the selected strategy's market
+    activeMarket = (name !== 'all' && strategyMarkets[name]) || 'SOL';
+    document.getElementById('chart-market').textContent = activeMarket;
+    var mktPrice = (marketPriceHistories[activeMarket] || []);
+    if (mktPrice.length > 0) {
+      document.getElementById('chart-price').textContent = '$' + fmt(mktPrice[mktPrice.length - 1].price, 2);
+    }
     if (lastLeaderboard) renderStrategies(lastLeaderboard);
     renderFeed();
     renderAccountBar();
+    drawChart();
   };
 
   /* ─── Strategy Panel ───────────────────────── */
@@ -858,10 +872,25 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     es.addEventListener('price', function(e) {
       var d = JSON.parse(e.data);
       prevSol = d.sol;
-      document.getElementById('chart-price').textContent = '$' + fmt(d.sol, 2);
 
+      // Track per-market price histories
+      if (d.prices) {
+        for (var sym in d.prices) {
+          if (!marketPriceHistories[sym]) marketPriceHistories[sym] = [];
+          marketPriceHistories[sym].push({ time: d.timestamp, price: d.prices[sym] });
+          if (marketPriceHistories[sym].length > MAX_CHART_POINTS) marketPriceHistories[sym].shift();
+        }
+      }
+
+      // Fallback: always track SOL in the legacy array
       priceHistory.push({ time: d.timestamp, price: d.sol });
       if (priceHistory.length > MAX_CHART_POINTS) priceHistory.shift();
+
+      // Update chart price display for the active market
+      var displayPrice = (d.prices && d.prices[activeMarket]) || d.sol;
+      document.getElementById('chart-price').textContent = '$' + fmt(displayPrice, 2);
+      document.getElementById('chart-market').textContent = activeMarket;
+
       drawChart();
     });
 
