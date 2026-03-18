@@ -179,7 +179,6 @@ async function main(): Promise<void> {
     activeSubAccountId: activeSubAccountIds[0],
     subAccountIds: activeSubAccountIds,
     accountSubscription: { type: 'websocket' },
-    perpMarketIndexes: [...new Set(Object.values(strategyMarketIndices))],
   });
 
   await driftClient.subscribe();
