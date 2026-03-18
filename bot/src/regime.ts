@@ -449,6 +449,7 @@ export class RegimeStrategy implements BaseStrategy {
     this.paper.setUseMarketEntry(true);
     this.paper.openPaper(direction, price, betSize * LEVERAGE, feeRate, now);
     this.paper.saveEntryRegime(regime);
+    this.paper.saveEntryMean(this.entryRollingMean);
 
     const mode = regime === 'RANGING' ? 'REV' : 'TRD';
     console.log(
@@ -549,12 +550,11 @@ export class RegimeStrategy implements BaseStrategy {
     }
   }
 
-  /** Reversion exits: TP at rolling mean (live or locked), hard SL (locked ATR from entry) */
+  /** Reversion exits: TP at rolling mean, trailing stop on winners, hard SL */
   private checkReversionExit(price: number): void {
     if (this.entryScaledAtr <= 0) return;
 
     // TP: price returns to rolling mean
-    // Live mean (default) adapts as the mean drifts — can trigger losing TPs
     // Locked mean uses the entry-time snapshot — guarantees profitable TPs
     const tpMean = this.config._useLockedMeanTP ? this.entryRollingMean : this.rollingMean;
     if (this.entryDirection === 'long' && price >= tpMean) {
@@ -566,10 +566,40 @@ export class RegimeStrategy implements BaseStrategy {
       return;
     }
 
+    // Track best price for trailing stop
+    this.trackBestPrice(price);
+
+    // Trailing stop on reversion trades — prevents holding winners forever
+    // Activates after trail delay AND only when trade is profitable
+    const holdTime = this.lastTickTime - this.entryTickTime;
+    if (holdTime >= this.config.trailDelaySeconds) {
+      const movePct = ((price / this.entryPrice) - 1) * 100;
+      const favorable = this.entryDirection === 'long' ? movePct : -movePct;
+
+      if (favorable > 0) {
+        const stopAtr = this.scaledAtr(this.config.regimeWindowSeconds / 60);
+        const trailPct = this.config.trailingAtrMultiple * stopAtr;
+
+        if (this.entryDirection === 'long') {
+          const drawdown = ((this.bestPriceSinceEntry - price) / this.bestPriceSinceEntry) * 100;
+          if (drawdown >= trailPct) {
+            this.exit(price, this.lastTickTime, MAKER_FEE_RATE, 'rev-trail');
+            return;
+          }
+        } else {
+          const drawup = ((price - this.bestPriceSinceEntry) / this.bestPriceSinceEntry) * 100;
+          if (drawup >= trailPct) {
+            this.exit(price, this.lastTickTime, MAKER_FEE_RATE, 'rev-trail');
+            return;
+          }
+        }
+      }
+    }
+
     // Hard SL — uses ATR snapshot from entry (locked, not live)
     const slPct = this.config.reversionSlMultiple * this.entryScaledAtr;
-    const movePct = ((price / this.entryPrice) - 1) * 100;
-    const adverse = this.entryDirection === 'long' ? -movePct : movePct;
+    const movePctSl = ((price / this.entryPrice) - 1) * 100;
+    const adverse = this.entryDirection === 'long' ? -movePctSl : movePctSl;
 
     if (adverse >= slPct) {
       this.exit(price, this.lastTickTime, MAKER_FEE_RATE, 'SL');
@@ -720,10 +750,35 @@ export class RegimeStrategy implements BaseStrategy {
         const slPrice = this.entryDirection === 'long'
           ? this.entryPrice * (1 - slPct / 100)
           : this.entryPrice * (1 + slPct / 100);
-        result['TP target'] = `$${this.rollingMean.toFixed(2)} (mean) | ${this.entryDirection === 'long' ? '+' : ''}${(((this.rollingMean / price) - 1) * 100).toFixed(2)}% away | ${fmtPnl(this.rollingMean)}`;
+        const tpMean = this.config._useLockedMeanTP ? this.entryRollingMean : this.rollingMean;
+        const tpLabel = this.config._useLockedMeanTP ? 'locked mean' : 'mean';
+        result['TP target'] = `$${tpMean.toFixed(2)} (${tpLabel}) | ${this.entryDirection === 'long' ? '+' : ''}${(((tpMean / price) - 1) * 100).toFixed(2)}% away | ${fmtPnl(tpMean)}`;
+        if (this.config._useLockedMeanTP) {
+          result['live mean'] = `$${this.rollingMean.toFixed(2)} (current 2h avg)`;
+        }
         result['SL price'] = `$${slPrice.toFixed(2)} (${slPct.toFixed(2)}% from entry) | ${fmtPnl(slPrice)}`;
         posLevels.sl = slPrice;
-        posLevels.tp = this.rollingMean;
+        posLevels.tp = tpMean;
+
+        // Reversion trailing stop status
+        if (holdSec < this.config.trailDelaySeconds) {
+          result['rev trail'] = `DELAYED — ${Math.round(this.config.trailDelaySeconds - holdSec)}s until active`;
+        } else if (favorable > 0) {
+          const stopAtr = this.scaledAtr(this.config.regimeWindowSeconds / 60);
+          const trailPct = this.config.trailingAtrMultiple * stopAtr;
+          const trailPrice = this.entryDirection === 'long'
+            ? this.bestPriceSinceEntry * (1 - trailPct / 100)
+            : this.bestPriceSinceEntry * (1 + trailPct / 100);
+          const distToTrail = this.entryDirection === 'long'
+            ? ((price - trailPrice) / price) * 100
+            : ((trailPrice - price) / price) * 100;
+          result['rev trail'] = `ACTIVE | best=$${this.bestPriceSinceEntry.toFixed(2)} trigger=$${trailPrice.toFixed(2)} (${trailPct.toFixed(2)}% from best) | ${fmtPnl(trailPrice)}`;
+          result['trail margin'] = `${distToTrail.toFixed(2)}% from trigger`;
+          posLevels.trail = trailPrice;
+          posLevels.best = this.bestPriceSinceEntry;
+        } else {
+          result['rev trail'] = `WAITING — trade not yet profitable`;
+        }
       } else {
         // Trend/Uncertain: show SL and pure ATR trail levels
         const slPrice = this.entryDirection === 'long'
@@ -879,14 +934,14 @@ export class RegimeStrategy implements BaseStrategy {
    */
   recoverPosition(
     pos: { direction: Direction; size: number; entryPrice: number },
-    extras?: { entryTickTime?: number; bestPriceSinceEntry?: number; entryRegime?: string },
+    extras?: { entryTickTime?: number; bestPriceSinceEntry?: number; entryRegime?: string; entryRollingMean?: number },
   ): void {
     this.entryPrice = pos.entryPrice;
     this.entryDirection = pos.direction;
     this.entryTickTime = extras?.entryTickTime ?? (this.lastTickTime - 3600); // default: 1h ago
     this.entryRegime = (extras?.entryRegime as Regime) ?? 'TRENDING'; // safe default
     this.bestPriceSinceEntry = extras?.bestPriceSinceEntry ?? pos.entryPrice;
-    this.entryRollingMean = this.rollingMean; // use current mean (computed during warmup)
+    this.entryRollingMean = extras?.entryRollingMean ?? this.rollingMean; // prefer saved, fallback to current
 
     // Re-open paper state only — Drift position already exists, don't place a duplicate order
     if ('recoverPaper' in this.paper) {

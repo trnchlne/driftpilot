@@ -110,6 +110,10 @@ export class LiveTrader extends PaperTrader {
     this.executor.updateEntryRegime(this.strategyName, regime);
   }
 
+  override saveEntryMean(mean: number): void {
+    this.executor.updateEntryMean(this.strategyName, mean);
+  }
+
   override closePaper(price: number, feeRate: number, time?: number): PaperTrade | null {
     // Paper side first (synchronous)
     const trade = super.closePaper(price, feeRate, time);

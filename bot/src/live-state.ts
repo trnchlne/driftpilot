@@ -16,6 +16,7 @@ export interface StrategyExtras {
   entryTickTime: number;
   bestPriceSinceEntry: number;
   entryRegime?: string;
+  entryRollingMean?: number;
 }
 
 export type LiveStateData = Record<string, StrategyExtras>;

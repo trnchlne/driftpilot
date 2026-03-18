@@ -73,6 +73,9 @@ export class PaperTrader {
   /** Override in LiveTrader to persist entry regime to state file */
   saveEntryRegime(_regime: string): void {}
 
+  /** Override in LiveTrader to persist locked mean for reversion TP recovery */
+  saveEntryMean(_mean: number): void {}
+
   /** Override in LiveTrader to use market orders for trending entries */
   setUseMarketEntry(_use: boolean): void {}
 

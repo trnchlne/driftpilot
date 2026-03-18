@@ -345,6 +345,16 @@ export class DriftExecutor {
   }
 
   /**
+   * Save the locked entry rolling mean for reversion TP recovery.
+   */
+  updateEntryMean(stratName: string, mean: number): void {
+    const existing = this.stateManager.get(stratName);
+    if (existing) {
+      this.stateManager.set(stratName, { ...existing, entryRollingMean: mean });
+    }
+  }
+
+  /**
    * Read account balance for a subaccount (USDC values).
    * Uses getNetUsdValue() for the true account value (no margin haircuts)
    * so the dashboard matches Drift's UI.
