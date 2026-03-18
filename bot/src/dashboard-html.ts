@@ -805,7 +805,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       + '<div class="market-item">'
       + '<div class="market-label">Spread</div>'
       + '<div class="market-value">' + spreadPct.toFixed(3) + '%</div>'
-      + '<div class="market-sub">Gap between best buy and sell price &mdash; lower is cheaper to trade</div>'
+      + '<div class="market-sub">Your cost per round-trip (open + close) &mdash; at ' + spreadPct.toFixed(3) + '% you pay ~$' + (150 * spreadPct / 100 * 2).toFixed(2) + ' per SOL traded</div>'
       + '</div>'
 
       // Open Interest — market size
@@ -817,7 +817,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       + '</div>'
 
       // Long/Short balance
-      + '<div class="market-item" style="grid-column:1/-1">'
+      + '<div class="market-item" style="grid-column:span 2">'
       + '<div class="market-label">Long vs Short</div>'
       + '<div class="market-value">' + longPct.toFixed(1) + '% long / ' + (100 - longPct).toFixed(1) + '% short</div>'
       + '<div class="market-bar"><div class="market-bar-fill" style="width:100%;background:linear-gradient(90deg,#34d399 0%,#34d399 ' + longPct.toFixed(1) + '%,#ef4444 ' + longPct.toFixed(1) + '%,#ef4444 100%)"></div></div>'
