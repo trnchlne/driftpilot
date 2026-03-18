@@ -23,14 +23,14 @@ import {
 import type { Direction } from './base-strategy.js';
 import type { LiveStateManager } from './live-state.js';
 
-const SOL_PERP_MARKET_INDEX = 0;
+const DEFAULT_MARKET_INDEX = 0; // SOL-PERP
 const LIMIT_ORDER_EXPIRY_SECONDS = 30;
 const FILL_POLL_INTERVAL_MS = 2000;
 const FILL_POLL_MAX_WAIT_MS = 35_000; // slightly longer than expiry
 
 export interface DriftPosition {
   direction: Direction;
-  size: number;       // base asset amount in SOL
+  size: number;       // base asset amount
   entryPrice: number; // USD
 }
 
@@ -58,6 +58,7 @@ export class DriftExecutor {
     entryTickTime: number,
     entryPrice: number,
     useMarketOrder = false,
+    marketIndex = DEFAULT_MARKET_INDEX,
   ): Promise<boolean> {
     let filled = false;
     await this.withMutex(async () => {
@@ -71,13 +72,13 @@ export class DriftExecutor {
       let priorBaseAmount = new BN(0);
       try {
         const user = this.client.getUser(subAccountId);
-        const position = user.getPerpPosition(SOL_PERP_MARKET_INDEX);
+        const position = user.getPerpPosition(marketIndex);
         if (position) {
           priorBaseAmount = position.baseAssetAmount;
           if (!position.baseAssetAmount.isZero()) {
             console.error(
               `[executor] STALE POSITION DETECTED sub=${subAccountId} (${stratName}) ` +
-              `size=${position.baseAssetAmount.toNumber() / 1e9} SOL — aborting open to prevent double exposure`,
+              `size=${position.baseAssetAmount.toNumber() / 1e9} — aborting open to prevent double exposure`,
             );
             return; // filled stays false → LiveTrader will unwind paper
           }
@@ -87,35 +88,35 @@ export class DriftExecutor {
       if (useMarketOrder) {
         // ── Market order (taker) — guaranteed fill for trending entries ──
         const entryParams = getMarketOrderParams({
-          marketIndex: SOL_PERP_MARKET_INDEX,
+          marketIndex,
           direction: posDir,
           baseAssetAmount: baseAmount,
         });
 
         const entryTx = await this.client.placePerpOrder(entryParams);
-        console.log(`[executor] MARKET ${direction.toUpperCase()} ${sizeSol} SOL sub=${subAccountId} (${stratName}) tx=${entryTx}`);
+        console.log(`[executor] MARKET ${direction.toUpperCase()} ${sizeSol} sub=${subAccountId} mkt=${marketIndex} (${stratName}) tx=${entryTx}`);
 
         // Market orders fill immediately — brief poll to confirm
-        filled = await this.waitForFill(subAccountId, priorBaseAmount);
+        filled = await this.waitForFill(subAccountId, priorBaseAmount, marketIndex);
         if (!filled) {
           console.log(`[executor] MARKET ORDER NOT FILLED — unexpected (${stratName})`);
           try {
-            await this.client.cancelOrders(MarketType.PERP, SOL_PERP_MARKET_INDEX, undefined, undefined, subAccountId);
+            await this.client.cancelOrders(MarketType.PERP, marketIndex, undefined, undefined, subAccountId);
           } catch { /* nothing to cancel */ }
           return;
         }
 
-        console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} SOL sub=${subAccountId} (${stratName})`);
+        console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} sub=${subAccountId} mkt=${marketIndex} (${stratName})`);
       } else {
         // ── Post-only limit order (maker) — for ranging/reversion entries ──
-        const oracleData = this.client.getOracleDataForPerpMarket(SOL_PERP_MARKET_INDEX);
+        const oracleData = this.client.getOracleDataForPerpMarket(marketIndex);
         const oraclePrice = oracleData.price; // BN in PRICE_PRECISION (1e6)
 
         const limitPrice = oraclePrice;
         const maxTs = new BN(Math.floor(Date.now() / 1000) + LIMIT_ORDER_EXPIRY_SECONDS);
 
         const entryParams = getLimitOrderParams({
-          marketIndex: SOL_PERP_MARKET_INDEX,
+          marketIndex,
           direction: posDir,
           baseAssetAmount: baseAmount,
           price: limitPrice,
@@ -124,20 +125,20 @@ export class DriftExecutor {
         });
 
         const entryTx = await this.client.placePerpOrder(entryParams);
-        console.log(`[executor] LIMIT ${direction.toUpperCase()} ${sizeSol} SOL @ oracle sub=${subAccountId} (${stratName}) tx=${entryTx}`);
+        console.log(`[executor] LIMIT ${direction.toUpperCase()} ${sizeSol} @ oracle sub=${subAccountId} mkt=${marketIndex} (${stratName}) tx=${entryTx}`);
 
         // Poll for fill
-        filled = await this.waitForFill(subAccountId, priorBaseAmount);
+        filled = await this.waitForFill(subAccountId, priorBaseAmount, marketIndex);
 
         if (!filled) {
           console.log(`[executor] LIMIT EXPIRED — entry skipped (${stratName})`);
           try {
-            await this.client.cancelOrders(MarketType.PERP, SOL_PERP_MARKET_INDEX, undefined, undefined, subAccountId);
+            await this.client.cancelOrders(MarketType.PERP, marketIndex, undefined, undefined, subAccountId);
           } catch { /* order already expired */ }
           return;
         }
 
-        console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} SOL sub=${subAccountId} (${stratName})`);
+        console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} sub=${subAccountId} mkt=${marketIndex} (${stratName})`);
       }
 
       // 4. Place trigger-market SL order (reduceOnly, on-chain protection)
@@ -149,7 +150,7 @@ export class DriftExecutor {
       const triggerPriceBN = new BN(Math.round(slPrice * 1e6)); // PRICE_PRECISION = 1e6
 
       const slParams = getTriggerMarketOrderParams({
-        marketIndex: SOL_PERP_MARKET_INDEX,
+        marketIndex,
         direction: slDir,
         baseAssetAmount: baseAmount,
         triggerCondition,
@@ -173,12 +174,12 @@ export class DriftExecutor {
    * Poll until position size changes from pre-order snapshot (order filled)
    * or until timeout (order expired unfilled).
    */
-  private async waitForFill(subAccountId: number, priorBaseAmount: BN): Promise<boolean> {
+  private async waitForFill(subAccountId: number, priorBaseAmount: BN, marketIndex = DEFAULT_MARKET_INDEX): Promise<boolean> {
     const start = Date.now();
     while (Date.now() - start < FILL_POLL_MAX_WAIT_MS) {
       try {
         const user = this.client.getUser(subAccountId);
-        const position = user.getPerpPosition(SOL_PERP_MARKET_INDEX);
+        const position = user.getPerpPosition(marketIndex);
         const currentBase = position ? position.baseAssetAmount : new BN(0);
         // Position size changed from pre-order snapshot → order filled
         if (!currentBase.eq(priorBaseAmount)) {
@@ -194,7 +195,7 @@ export class DriftExecutor {
    * Close a position: cancel SL trigger + market close + verify.
    * Retries once if position remains after the first close attempt.
    */
-  async close(stratName: string, subAccountId: number): Promise<void> {
+  async close(stratName: string, subAccountId: number, marketIndex = DEFAULT_MARKET_INDEX): Promise<void> {
     await this.withMutex(async () => {
       // 1. Switch to subaccount
       await this.client.switchActiveUser(subAccountId);
@@ -203,7 +204,7 @@ export class DriftExecutor {
       try {
         await this.client.cancelOrders(
           MarketType.PERP,
-          SOL_PERP_MARKET_INDEX,
+          marketIndex,
           undefined, // direction
           undefined, // txParams
           subAccountId,
@@ -215,7 +216,7 @@ export class DriftExecutor {
 
       // 3. Read position from Drift
       const user = this.client.getUser(subAccountId);
-      const position = user.getPerpPosition(SOL_PERP_MARKET_INDEX);
+      const position = user.getPerpPosition(marketIndex);
 
       if (!position || position.baseAssetAmount.isZero()) {
         console.log(`[executor] No position to close sub=${subAccountId} (${stratName})`);
@@ -229,7 +230,7 @@ export class DriftExecutor {
       const size = position.baseAssetAmount.abs();
 
       const closeParams = getMarketOrderParams({
-        marketIndex: SOL_PERP_MARKET_INDEX,
+        marketIndex,
         direction: closeDir,
         baseAssetAmount: size,
         reduceOnly: true,
@@ -242,18 +243,18 @@ export class DriftExecutor {
       await new Promise(r => setTimeout(r, 2000));
       try {
         const userAfter = this.client.getUser(subAccountId);
-        const posAfter = userAfter.getPerpPosition(SOL_PERP_MARKET_INDEX);
+        const posAfter = userAfter.getPerpPosition(marketIndex);
         if (posAfter && !posAfter.baseAssetAmount.isZero()) {
           const remainingSize = posAfter.baseAssetAmount.abs().toNumber() / 1e9;
           console.error(
             `[executor] CLOSE INCOMPLETE sub=${subAccountId} (${stratName}) — ` +
-            `${remainingSize.toFixed(4)} SOL remaining, retrying...`,
+            `${remainingSize.toFixed(4)} remaining, retrying...`,
           );
           const retryDir = posAfter.baseAssetAmount.gt(new BN(0))
             ? PositionDirection.SHORT
             : PositionDirection.LONG;
           const retryParams = getMarketOrderParams({
-            marketIndex: SOL_PERP_MARKET_INDEX,
+            marketIndex,
             direction: retryDir,
             baseAssetAmount: posAfter.baseAssetAmount.abs(),
             reduceOnly: true,
@@ -264,12 +265,12 @@ export class DriftExecutor {
           // Final check after retry
           await new Promise(r => setTimeout(r, 2000));
           const userFinal = this.client.getUser(subAccountId);
-          const posFinal = userFinal.getPerpPosition(SOL_PERP_MARKET_INDEX);
+          const posFinal = userFinal.getPerpPosition(marketIndex);
           if (posFinal && !posFinal.baseAssetAmount.isZero()) {
             const ghostSize = posFinal.baseAssetAmount.abs().toNumber() / 1e9;
             console.error(
               `[executor] *** GHOST POSITION *** sub=${subAccountId} (${stratName}) — ` +
-              `${ghostSize.toFixed(4)} SOL still open after 2 close attempts! Manual intervention needed.`,
+              `${ghostSize.toFixed(4)} still open after 2 close attempts! Manual intervention needed.`,
             );
           }
         }
@@ -284,18 +285,20 @@ export class DriftExecutor {
 
   /**
    * Read all positions across subaccounts.
-   * Used for recovery on restart.
+   * Used for recovery on restart. Checks the given marketIndex for each strategy.
    */
   async readAllPositions(
     subAccountMap: Record<string, number>,
+    strategyMarketIndices?: Record<string, number>,
   ): Promise<Map<string, DriftPosition>> {
     const result = new Map<string, DriftPosition>();
 
     await this.withMutex(async () => {
       for (const [stratName, subId] of Object.entries(subAccountMap)) {
         try {
+          const mktIdx = strategyMarketIndices?.[stratName] ?? DEFAULT_MARKET_INDEX;
           const user = this.client.getUser(subId);
-          const position = user.getPerpPosition(SOL_PERP_MARKET_INDEX);
+          const position = user.getPerpPosition(mktIdx);
 
           if (!position || position.baseAssetAmount.isZero()) continue;
 
@@ -365,23 +368,23 @@ export class DriftExecutor {
   }
 
   /**
-   * Read SOL-PERP market data: funding, OI, spread, liquidity.
+   * Read perp market data: funding, OI, spread, liquidity.
    * Uses BN string parsing to avoid overflow on large values.
    */
-  readMarketData(): {
+  readMarketData(marketIndex = DEFAULT_MARKET_INDEX): {
     fundingRate: number; fundingRate24h: number; spreadBps: number; markPrice: number;
     longOI: number; shortOI: number; maxOI: number; sqrtK: number; userLpShares: number;
     usersWithPositions: number; totalUsers: number;
   } | null {
     try {
-      const market = this.client.getPerpMarketAccount(SOL_PERP_MARKET_INDEX);
+      const market = this.client.getPerpMarketAccount(marketIndex);
       if (!market) {
-        console.warn('[executor] readMarketData: no market account for SOL-PERP');
+        console.warn(`[executor] readMarketData: no market account for index ${marketIndex}`);
         return null;
       }
 
       const amm = market.amm;
-      const oracleData = this.client.getOracleDataForPerpMarket(SOL_PERP_MARKET_INDEX);
+      const oracleData = this.client.getOracleDataForPerpMarket(marketIndex);
       const oraclePrice = oracleData.price.toNumber() / 1e6; // PRICE_PRECISION
 
       // Safe BN → number for potentially large values (avoids toNumber() overflow)

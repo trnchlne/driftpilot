@@ -1,4 +1,3 @@
-import { SOL_FEED_ID } from './feed.js';
 import type { Tick } from './feed.js';
 import type { BaseStrategy, PerformanceMetrics, Direction, PaperTrade } from './base-strategy.js';
 import { PaperTrader } from './base-strategy.js';
@@ -30,9 +29,14 @@ interface PriceSample {
   price: number;
 }
 
+const SOL_FEED_ID = 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d';
+
 export interface RegimeConfig {
   type: 'regime';
   name: string;
+
+  // Market — Pyth feed ID to listen for (defaults to SOL)
+  feedId?: string;
 
   // ATR engine
   atrPeriod: number;             // minutes — rolling ATR window
@@ -157,7 +161,7 @@ export class RegimeStrategy implements BaseStrategy {
   }
 
   onTick(tick: Tick): void {
-    if (tick.feedId !== SOL_FEED_ID) return;
+    if (tick.feedId !== (this.config.feedId ?? SOL_FEED_ID)) return;
 
     const now = tick.publishTime;
     const price = tick.price;
@@ -671,7 +675,7 @@ export class RegimeStrategy implements BaseStrategy {
         status: `WARMING UP (${warmPct}%)`,
         atrSamples: `${this.atrBuffer.length}/${this.config.atrPeriod}`,
         bufferSpan: `${Math.round(bufferSpan / 60)}m / ${Math.round(this.config.regimeWindowSeconds * 0.9 / 60)}m`,
-        'sol price': this.lastPrice > 0 ? `$${this.lastPrice.toFixed(2)}` : '--',
+        'price': this.lastPrice > 0 ? `$${this.lastPrice.toFixed(2)}` : '--',
       };
     }
 
@@ -776,7 +780,7 @@ export class RegimeStrategy implements BaseStrategy {
       windows: `regime ${fmtWin(this.config.regimeWindowSeconds)} | signal ${fmtWin(this.config.signalWindowSeconds)} | mean ${fmtWin(this.config.meanWindowSeconds)}`,
       'ATR%': `${this.atrPct.toFixed(4)}% (${this.config.atrPeriod}m window)`,
       mean: `$${this.rollingMean.toFixed(2)} (${fmtWin(this.config.meanWindowSeconds)} avg)`,
-      'sol price': `$${price.toFixed(2)}`,
+      'price': `$${price.toFixed(2)}`,
     };
 
     // Last trade summary

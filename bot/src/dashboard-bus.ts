@@ -30,6 +30,8 @@ export interface TradeEvent {
 export interface LeaderboardEntry {
   name: string;
   type: string;
+  market?: string;
+  subAccountId?: number;
   metrics: {
     totalTrades: number;
     wins: number;

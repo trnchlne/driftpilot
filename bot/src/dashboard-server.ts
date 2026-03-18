@@ -101,6 +101,8 @@ export class DashboardServer {
     const strategies = (this.lastLeaderboard?.entries ?? []).map(e => ({
       name: e.name,
       type: e.type,
+      market: e.market ?? 'SOL',
+      subAccountId: e.subAccountId ?? null,
       metrics: e.metrics,
       state: e.thinking,
     }));

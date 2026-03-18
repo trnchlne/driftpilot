@@ -18,6 +18,7 @@ export class LiveTrader extends PaperTrader {
   private readonly subAccountId: number;
   private readonly executor: DriftExecutor;
   private readonly slPct: number; // stop-loss % from entry
+  private readonly marketIndex: number;
 
   private lastEntryDirection: Direction = 'long';
   private lastEntryPrice = 0;
@@ -30,12 +31,14 @@ export class LiveTrader extends PaperTrader {
     subAccountId: number;
     executor: DriftExecutor;
     slPct: number;
+    marketIndex?: number;
   }) {
     super();
     this.strategyName = opts.strategyName;
     this.subAccountId = opts.subAccountId;
     this.executor = opts.executor;
     this.slPct = opts.slPct;
+    this.marketIndex = opts.marketIndex ?? 0;
   }
 
   override setUseMarketEntry(use: boolean): void {
@@ -81,6 +84,7 @@ export class LiveTrader extends PaperTrader {
         this.lastEntryTickTime,
         price,
         useMarket,
+        this.marketIndex,
       )
       .then((filled) => {
         if (!filled) {
@@ -115,7 +119,7 @@ export class LiveTrader extends PaperTrader {
 
     // Fire Drift close async (with retry + verification in executor)
     this.executor
-      .close(this.strategyName, this.subAccountId)
+      .close(this.strategyName, this.subAccountId, this.marketIndex)
       .then(() => {
         this._pendingClose = false;
       })

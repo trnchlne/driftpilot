@@ -5,6 +5,9 @@
  * recovers open positions from Drift state on restart, and pipes
  * PriceFeed ticks through the same Arena/Strategy logic.
  *
+ * Supports multi-market trading (SOL, HYPE, etc.) — a single Pyth SSE
+ * connection streams all needed feeds, and each strategy filters by feedId.
+ *
  * Usage: npx tsx src/live.ts
  * Requires: .env with PRIVATE_KEY and RPC_URL
  */
@@ -21,7 +24,7 @@ import { Connection, Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 
 import { PriceFeed, fetchWarmupTicks } from './feed.js';
-import { STRATEGIES, SUBACCOUNT_MAP, getStopLossPct } from './strategies.js';
+import { STRATEGIES, SUBACCOUNT_MAP, MARKETS, getStopLossPct, getMarketForStrategy } from './strategies.js';
 import type { StrategyConfig } from './strategies.js';
 import type { BaseStrategy } from './base-strategy.js';
 import { TrendStrategy } from './trend.js';
@@ -29,6 +32,7 @@ import { MomentumStrategy } from './momentum.js';
 import { LevelStrategy } from './level.js';
 import { RegimeStrategy } from './regime.js';
 import { Arena } from './arena.js';
+import type { StrategyMeta } from './arena.js';
 import { DashboardServer } from './dashboard-server.js';
 import { dashboardBus } from './dashboard-bus.js';
 import { BankrollManager } from './bankroll.js';
@@ -47,12 +51,14 @@ function createLiveStrategy(
     throw new Error(`No subaccount mapped for strategy ${cfg.name}`);
   }
 
+  const market = getMarketForStrategy(cfg);
   const slPct = getStopLossPct(cfg.name);
   const trader = new LiveTrader({
     strategyName: cfg.name,
     subAccountId: subId,
     executor,
     slPct,
+    marketIndex: market.marketIndex,
   });
 
   // Per-subaccount bankroll — each strategy sizes bets against its own collateral
@@ -74,9 +80,12 @@ function createLiveStrategy(
     case 'level':
       strategy = new LevelStrategy(cfg, trader);
       break;
-    case 'regime':
-      strategy = new RegimeStrategy(cfg, trader);
+    case 'regime': {
+      // Inject feedId from market config so the strategy filters the right ticks
+      const regimeCfg = { ...cfg, feedId: market.feedId };
+      strategy = new RegimeStrategy(regimeCfg, trader);
       break;
+    }
     default:
       throw new Error(`Unsupported strategy type for live trading: ${cfg.type}`);
   }
@@ -130,8 +139,29 @@ async function main(): Promise<void> {
   }
   const activeSubAccountIds = [...new Set(Object.values(activeSubAccountMap))];
 
+  // Build market index mapping per strategy
+  const strategyMarketIndices: Record<string, number> = {};
+  for (const cfg of activeStrategies) {
+    strategyMarketIndices[cfg.name] = getMarketForStrategy(cfg).marketIndex;
+  }
+
+  // Collect unique feed IDs and market configs for the active strategies
+  const feedIdSet = new Set<string>();
+  const warmupMarkets: { feedId: string; pythSymbol: string }[] = [];
+  const seenFeedIds = new Set<string>();
+  for (const cfg of activeStrategies) {
+    const market = getMarketForStrategy(cfg);
+    feedIdSet.add(market.feedId);
+    if (!seenFeedIds.has(market.feedId)) {
+      seenFeedIds.add(market.feedId);
+      warmupMarkets.push({ feedId: market.feedId, pythSymbol: market.pythSymbol });
+    }
+  }
+  const uniqueFeedIds = [...feedIdSet];
+
   console.log('[live] Starting Live Trading Bridge');
   console.log(`[live] ${activeStrategies.length} strategies → subaccounts [${activeSubAccountIds.join(', ')}]`);
+  console.log(`[live] Markets: ${warmupMarkets.map(m => m.pythSymbol).join(', ')}`);
   if (onlyStrategies) console.log(`[live] Filtered to: ${onlyStrategies.join(', ')}`);
   if (subOverride !== null) console.log(`[live] Subaccount override: all strategies → sub ${subOverride}`);
 
@@ -149,26 +179,38 @@ async function main(): Promise<void> {
     activeSubAccountId: activeSubAccountIds[0],
     subAccountIds: activeSubAccountIds,
     accountSubscription: { type: 'websocket' },
+    perpMarketIndexes: [...new Set(Object.values(strategyMarketIndices))],
   });
 
   await driftClient.subscribe();
   console.log('[live] Drift client connected');
 
-  // 2b. Set 10x max leverage on all active subaccounts (margin ratio = MARGIN_PRECISION / leverage)
+  // 2b. Set 10x max leverage on all active subaccounts per market
   const TARGET_LEVERAGE = 10;
   const MARGIN_PRECISION = 10_000;
   const marginRatio = MARGIN_PRECISION / TARGET_LEVERAGE; // 1000 = 10x
-  for (const subId of activeSubAccountIds) {
+
+  // Collect unique (subId, marketIndex) pairs to set leverage
+  const leveragePairs = new Set<string>();
+  for (const cfg of activeStrategies) {
+    const subId = subOverride ?? SUBACCOUNT_MAP[cfg.name];
+    const mktIdx = strategyMarketIndices[cfg.name];
+    leveragePairs.add(`${subId}:${mktIdx}`);
+  }
+  for (const pair of leveragePairs) {
+    const [subIdStr, mktIdxStr] = pair.split(':');
+    const subId = parseInt(subIdStr, 10);
+    const mktIdx = parseInt(mktIdxStr, 10);
     try {
       await driftClient.switchActiveUser(subId);
       const tx = await driftClient.updateUserPerpPositionCustomMarginRatio(
-        0,           // SOL-PERP market index
+        mktIdx,
         marginRatio,
         subId,
       );
-      console.log(`[live] Set ${TARGET_LEVERAGE}x max leverage on sub ${subId} tx=${tx}`);
+      console.log(`[live] Set ${TARGET_LEVERAGE}x on sub ${subId} mkt ${mktIdx} tx=${tx}`);
     } catch (err) {
-      console.warn(`[live] Failed to set leverage on sub ${subId}:`, err);
+      console.warn(`[live] Failed to set leverage on sub ${subId} mkt ${mktIdx}:`, err);
     }
   }
 
@@ -178,14 +220,14 @@ async function main(): Promise<void> {
 
   // 4. Recovery: read positions from Drift
   console.log('[live] Checking for open positions (recovery)...');
-  const openPositions = await executor.readAllPositions(activeSubAccountMap);
+  const openPositions = await executor.readAllPositions(activeSubAccountMap, strategyMarketIndices);
 
   if (openPositions.size > 0) {
     console.log(`[live] Found ${openPositions.size} open position(s):`);
     for (const [name, pos] of openPositions) {
       const extras = stateManager.get(name);
       console.log(
-        `[live]   ${name}: ${pos.direction.toUpperCase()} ${pos.size.toFixed(4)} SOL @ $${pos.entryPrice.toFixed(2)}` +
+        `[live]   ${name}: ${pos.direction.toUpperCase()} ${pos.size.toFixed(4)} @ $${pos.entryPrice.toFixed(2)}` +
         (extras ? ` | bestPrice=$${extras.bestPriceSinceEntry.toFixed(2)}` : ' | no state file (using defaults)'),
       );
     }
@@ -208,16 +250,20 @@ async function main(): Promise<void> {
     bankrolls.push(bankroll);
   }
 
-  const arena = new Arena(strategies);
+  // Build metadata for Arena (market + subaccount per strategy)
+  const arenaMeta: Record<string, StrategyMeta> = {};
+  for (const cfg of activeStrategies) {
+    const market = getMarketForStrategy(cfg);
+    arenaMeta[cfg.name] = {
+      market: market.symbol,
+      subAccountId: activeSubAccountMap[cfg.name],
+    };
+  }
+  const arena = new Arena(strategies, arenaMeta);
 
   // 6b. Warmup: replay historical ticks so strategies start warm (no 4h wait)
-  // Fetches 5h of 1-minute candles from Pyth Benchmarks API and feeds them
-  // through the strategies. Drift orders are suppressed during warmup since
-  // the paper.inPosition check prevents entries (no position = no exit management).
-  // Any entry signals during warmup are harmless — the bankroll has 0 equity
-  // until the first refreshFromDrift() call, so getBetSize() returns 0.
   try {
-    const warmupTicks = await fetchWarmupTicks(5);
+    const warmupTicks = await fetchWarmupTicks(5, warmupMarkets);
     console.log(`[warmup] Replaying ${warmupTicks.length} ticks through strategies...`);
     for (const tick of warmupTicks) {
       arena.onTick(tick);
@@ -243,8 +289,8 @@ async function main(): Promise<void> {
   const dashboard = new DashboardServer();
   dashboard.start();
 
-  // Wire feed to dashboard for health reporting
-  const feed = new PriceFeed();
+  // Wire feed to dashboard for health reporting — subscribe to all needed feeds
+  const feed = new PriceFeed(uniqueFeedIds);
   dashboard.setFeed(feed);
 
   // Track SOL price + account balance + market data
@@ -254,19 +300,24 @@ async function main(): Promise<void> {
   const ACCOUNT_EMIT_INTERVAL_MS = 30_000; // 30s
   const MARKET_EMIT_INTERVAL_MS = 60_000;  // 60s
 
+  // SOL feed ID for dashboard price display
+  const SOL_FEED_ID = MARKETS.SOL.feedId;
+
   feed.onTick((tick) => {
     arena.onTick(tick);
 
-    lastSol = tick.price;
-    // Fan out SOL price + equity refresh to all per-sub bankrolls
-    for (const bm of bankrolls) {
-      bm.updateSolPrice(tick.price);
-      bm.refreshFromDrift().catch((err) => {
-        console.error('[live] Bankroll refresh failed:', err);
-      });
-    }
-    if (lastSol > 0) {
-      dashboardBus.emitPrice({ sol: lastSol, timestamp: Date.now() });
+    // Use SOL price for dashboard display and bankroll SOL conversion
+    if (tick.feedId === SOL_FEED_ID) {
+      lastSol = tick.price;
+      for (const bm of bankrolls) {
+        bm.updateSolPrice(tick.price);
+        bm.refreshFromDrift().catch((err) => {
+          console.error('[live] Bankroll refresh failed:', err);
+        });
+      }
+      if (lastSol > 0) {
+        dashboardBus.emitPrice({ sol: lastSol, timestamp: Date.now() });
+      }
     }
 
     // Emit account balance periodically (aggregate all active subaccounts)
@@ -319,10 +370,10 @@ async function main(): Promise<void> {
       }
     }
 
-    // Emit market data periodically
+    // Emit market data periodically (for SOL — primary market)
     if (now - lastMarketEmit >= MARKET_EMIT_INTERVAL_MS) {
       lastMarketEmit = now;
-      const marketData = executor.readMarketData();
+      const marketData = executor.readMarketData(MARKETS.SOL.marketIndex);
       if (marketData) {
         dashboardBus.emitMarket(marketData);
       }
@@ -336,13 +387,14 @@ async function main(): Promise<void> {
   console.log('');
   console.log('[live] ═══ LIVE TRADING ACTIVE ═══');
   console.log('');
-  console.log('  Sub  Strategy         SL%    Type');
-  console.log('  ───  ───────────────  ─────  ────────');
+  console.log('  Sub  Market  Strategy         SL%    Type');
+  console.log('  ───  ──────  ───────────────  ─────  ────────');
   for (const cfg of activeStrategies) {
     const sub = activeSubAccountMap[cfg.name];
     const sl = getStopLossPct(cfg.name);
+    const market = getMarketForStrategy(cfg);
     console.log(
-      `  ${String(sub).padStart(3)}  ${cfg.name.padEnd(15)}  ${sl.toFixed(2)}%  ${cfg.type}`,
+      `  ${String(sub).padStart(3)}  ${market.symbol.padEnd(6)}  ${cfg.name.padEnd(15)}  ${sl.toFixed(2)}%  ${cfg.type}`,
     );
   }
   console.log('');

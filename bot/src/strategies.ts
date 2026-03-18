@@ -1,41 +1,74 @@
+/* ─── Market definitions ─────────────────────────────── */
+
+export interface MarketConfig {
+  symbol: string;          // e.g. 'SOL', 'HYPE'
+  feedId: string;          // Pyth price feed ID
+  marketIndex: number;     // Drift perp market index
+  pythSymbol: string;      // Pyth Benchmarks symbol for warmup (e.g. 'Crypto.SOL/USD')
+}
+
+export const MARKETS: Record<string, MarketConfig> = {
+  SOL: {
+    symbol: 'SOL',
+    feedId: 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+    marketIndex: 0,
+    pythSymbol: 'Crypto.SOL/USD',
+  },
+  HYPE: {
+    symbol: 'HYPE',
+    feedId: '4279e31cc369bbcc2faf022b382b080e32a8e689ff20fbc530d2a603eb6cd98b',
+    marketIndex: 59,
+    pythSymbol: 'Crypto.HYPE/USD',
+  },
+};
+
+/* ─── Strategy config types ──────────────────────────── */
+
 export type StrategyConfig =
   | {
       type: 'momentum'; name: string; threshold: number;
       window: number; holdSeconds: number; betSizeSol: number;
       takeProfitPct: number; stopLossPct: number;
+      market?: string;
     }
   | {
       type: 'range'; name: string; lookbackSeconds: number;
       entryZoneLow: number; entryZoneHigh: number; stopLossPct: number;
       minChannelPct: number; betSizeSol: number; maxHoldSeconds: number;
+      market?: string;
     }
   | {
       type: 'grid'; name: string; spacingPct: number;
       levelsPerSide: number; betPerLevel: number;
       recenterPct: number; maxExposureSol: number;
+      market?: string;
     }
   | {
       type: 'fade'; name: string; fadeThresholdPct: number;
       fadeWindowSeconds: number; stopLossPct: number;
       takeProfitPct: number; divergenceMinPct: number;
       betSizeSol: number; maxHoldSeconds: number;
+      market?: string;
     }
   | {
       type: 'spread'; name: string; lookbackSeconds: number;
       deviationThreshold: number; stopLossPct: number;
       takeProfitPct: number; cooldownSeconds: number;
       maxHoldSeconds: number; betSizeSol: number; minSamples: number;
+      market?: string;
     }
   | {
       type: 'breakout'; name: string; lookbackSeconds: number;
       breakoutPct: number; trailingStopPct: number;
       maxHoldSeconds: number; betSizeSol: number;
       minConsolidationPct: number;
+      market?: string;
     }
   | {
       type: 'trend'; name: string; threshold: number;
       window: number; trailingStopPct: number; trailDelaySeconds: number;
       stopLossPct: number; betSizeSol: number;
+      market?: string;
     }
   | {
       type: 'level'; name: string; lookbackSeconds: number;
@@ -45,6 +78,7 @@ export type StrategyConfig =
       fundingLookbackSeconds: number; fundingBiasMinPct: number;
       betSizeSol: number; minSamplesForLevel: number;
       regimeFilterPct: number; regimeFilterSeconds: number;
+      market?: string;
     }
   | {
       type: 'regime'; name: string;
@@ -59,6 +93,8 @@ export type StrategyConfig =
       minAtrPct?: number;
       uncertainMultiple?: number;
       portfolioTpPct?: number;
+      _useLockedMeanTP?: boolean;
+      market?: string;
     };
 
 export const STRATEGIES: StrategyConfig[] = [
@@ -100,12 +136,16 @@ export const STRATEGIES: StrategyConfig[] = [
   // Combined cross-parameter search: 4374 combos, all periods positive, avg Sharpe 0.213
   // Key changes from prev: trail 0.8→1.5, win 25m→40m (14d+30d grid: 70% WR, PF 4-5, MaxDD 4-7%, +40-68% ROI)
   // Trending was bleeding at 29% WR with tight 0.8x trail + 25m window — wider trail lets winners run, 40m filters noise
-  { type: 'regime', name: 'R-base',   atrPeriod: 90, regimeWindowSeconds: 4*3600, trendThreshold: 1.2, rangeThreshold: 1.0, signalWindowSeconds: 40*60, signalMultiple: 4.5, trailingAtrMultiple: 1.5, slAtrMultiple: 1.0, trailDelaySeconds: 300, meanWindowSeconds: 1*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, uncertainMultiple: 1.0 },
+  { type: 'regime', name: 'R-base-SOL',   market: 'SOL', atrPeriod: 90, regimeWindowSeconds: 4*3600, trendThreshold: 1.2, rangeThreshold: 1.0, signalWindowSeconds: 40*60, signalMultiple: 4.5, trailingAtrMultiple: 1.5, slAtrMultiple: 1.0, trailDelaySeconds: 300, meanWindowSeconds: 1*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, uncertainMultiple: 1.0 },
   // Selective variant: trend-heavy regime, higher signal bar — fewer trades, better Sharpe
-  { type: 'regime', name: 'R-sharp',  atrPeriod: 60, regimeWindowSeconds: 4*3600, trendThreshold: 1.0, rangeThreshold: 0.2, signalWindowSeconds: 30*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 480, meanWindowSeconds: 2*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 300, betSizeSol: 1.0 },
+  { type: 'regime', name: 'R-sharp-SOL',  market: 'SOL', atrPeriod: 60, regimeWindowSeconds: 4*3600, trendThreshold: 1.0, rangeThreshold: 0.2, signalWindowSeconds: 30*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 480, meanWindowSeconds: 2*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 300, betSizeSol: 1.0 },
   // Fast ATR variant: 20m/5.0 signal, tight entry band, low reversion SL — differentiated from R-base
   // Grid search #2 (1920 combos): +228.7% ROI, 66.2% WR, Sharpe 0.067, MaxDD 33.6%, 5/5 periods+
-  { type: 'regime', name: 'R-fast',   atrPeriod: 30, regimeWindowSeconds: 4*3600, trendThreshold: 1.5, rangeThreshold: 0.5, signalWindowSeconds: 20*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 300, meanWindowSeconds: 2*3600, entryBandMultiple: 1.5, reversionSlMultiple: 3.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, portfolioTpPct: 6, _useLockedMeanTP: true },
+  { type: 'regime', name: 'R-fast-SOL',   market: 'SOL', atrPeriod: 30, regimeWindowSeconds: 4*3600, trendThreshold: 1.5, rangeThreshold: 0.5, signalWindowSeconds: 20*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 300, meanWindowSeconds: 2*3600, entryBandMultiple: 1.5, reversionSlMultiple: 3.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, portfolioTpPct: 6, _useLockedMeanTP: true },
+
+  // ── HYPE-PERP strategies ──
+  // Backtested on 468 days of HYPE data: R-fast +160.8% ROI, 2h mean optimal
+  { type: 'regime', name: 'R-fast-HYPE',  market: 'HYPE', atrPeriod: 30, regimeWindowSeconds: 4*3600, trendThreshold: 1.5, rangeThreshold: 0.5, signalWindowSeconds: 20*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 300, meanWindowSeconds: 2*3600, entryBandMultiple: 1.5, reversionSlMultiple: 3.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, portfolioTpPct: 6, _useLockedMeanTP: true },
 ];
 
 // Strategy name → Drift subaccount ID (one subaccount per strategy for isolation)
@@ -122,9 +162,10 @@ export const SUBACCOUNT_MAP: Record<string, number> = {
   'M-bigtp3':     9,
   'M-active':    10,
   'M-base':      11,
-  'R-base':       0,
-  'R-sharp':     13,
-  'R-fast':       1,
+  'R-base-SOL':   0,
+  'R-sharp-SOL': 13,
+  'R-fast-SOL':   1,
+  'R-fast-HYPE':  2,
 };
 
 export const ALL_SUB_ACCOUNT_IDS = Object.values(SUBACCOUNT_MAP);
@@ -138,4 +179,12 @@ export function getStopLossPct(name: string): number {
   if (config.type === 'regime') return 2.0; // safety backstop — matches hard SL
   if (!('stopLossPct' in config)) throw new Error(`Strategy ${name} has no stopLossPct`);
   return config.stopLossPct;
+}
+
+/** Get the MarketConfig for a strategy (defaults to SOL if no market field) */
+export function getMarketForStrategy(cfg: StrategyConfig): MarketConfig {
+  const key = cfg.market ?? 'SOL';
+  const market = MARKETS[key];
+  if (!market) throw new Error(`Unknown market '${key}' for strategy ${cfg.name}`);
+  return market;
 }

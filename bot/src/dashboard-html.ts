@@ -670,7 +670,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
       html += '<div class="strat-card">'
         + '<div class="strat-header">'
-        + '<span class="strat-name">' + e.name + ' <span style="color:#5a5f73;font-size:11px;font-weight:400">' + e.type + '</span></span>'
+        + '<span class="strat-name">' + e.name + ' <span style="color:#5a5f73;font-size:11px;font-weight:400">' + e.type + (e.market ? ' · ' + e.market : '') + (e.subAccountId !== undefined ? ' · sub ' + e.subAccountId : '') + '</span></span>'
         + '<span class="strat-status ' + statusClass + '">' + statusStr + '</span>'
         + '</div>'
         + '<div class="strat-metrics">'

@@ -7,14 +7,21 @@ const EVAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DASH_INTERVAL_MS = 10 * 1000; // 10 seconds
 const MIN_TRADES_FOR_RANKING = 5;
 
+export interface StrategyMeta {
+  market?: string;
+  subAccountId?: number;
+}
+
 export class Arena {
   private readonly strategies: BaseStrategy[];
+  private readonly meta: Record<string, StrategyMeta>;
   private readonly startTime: number;
   private evalTimer: ReturnType<typeof setInterval> | null = null;
   private dashTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(strategies: BaseStrategy[]) {
+  constructor(strategies: BaseStrategy[], meta?: Record<string, StrategyMeta>) {
     this.strategies = strategies;
+    this.meta = meta ?? {};
     this.startTime = Date.now();
   }
 
@@ -116,9 +123,12 @@ export class Arena {
     for (const s of this.strategies) {
       const metrics = s.getMetrics();
       totalTrades += metrics.totalTrades;
+      const m = this.meta[s.name];
       entries.push({
         name: s.name,
         type: s.type,
+        market: m?.market,
+        subAccountId: m?.subAccountId,
         metrics: {
           totalTrades: metrics.totalTrades,
           wins: metrics.wins,
