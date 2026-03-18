@@ -74,6 +74,9 @@ export interface RegimeConfig {
 
   // Portfolio TP: auto-close when trade P&L >= X% of total portfolio equity (0 = disabled)
   portfolioTpPct?: number;
+
+  // Reversion TP mode: use locked entry-time mean instead of live rolling mean (default false)
+  _useLockedMeanTP?: boolean;
 }
 
 /* ─── RegimeStrategy ────────────────────────────────────── */
@@ -542,16 +545,19 @@ export class RegimeStrategy implements BaseStrategy {
     }
   }
 
-  /** Reversion exits: TP at current rolling mean, hard SL (locked ATR from entry) */
+  /** Reversion exits: TP at rolling mean (live or locked), hard SL (locked ATR from entry) */
   private checkReversionExit(price: number): void {
     if (this.entryScaledAtr <= 0) return;
 
-    // TP: price returns to current rolling mean (adapts as mean drifts)
-    if (this.entryDirection === 'long' && price >= this.rollingMean) {
+    // TP: price returns to rolling mean
+    // Live mean (default) adapts as the mean drifts — can trigger losing TPs
+    // Locked mean uses the entry-time snapshot — guarantees profitable TPs
+    const tpMean = this.config._useLockedMeanTP ? this.entryRollingMean : this.rollingMean;
+    if (this.entryDirection === 'long' && price >= tpMean) {
       this.exit(price, this.lastTickTime, MAKER_FEE_RATE, 'TP');
       return;
     }
-    if (this.entryDirection === 'short' && price <= this.rollingMean) {
+    if (this.entryDirection === 'short' && price <= tpMean) {
       this.exit(price, this.lastTickTime, MAKER_FEE_RATE, 'TP');
       return;
     }

@@ -46,8 +46,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .main {
     display: grid;
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr auto;
-    height: calc(100vh - 49px);
+    grid-template-rows: auto auto auto auto auto;
   }
 
   /* Account bar */
@@ -222,8 +221,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     margin-top: 1px;
   }
   .market-bar {
-    height: 4px;
-    border-radius: 2px;
+    height: 8px;
+    border-radius: 4px;
     background: #1e2536;
     margin-top: 4px;
     overflow: hidden;
@@ -769,82 +768,67 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     var el = document.getElementById('market-content');
     if (!el) return;
 
-    var fmtBN = function(v, dec) { return v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }); };
-    var fmtPct = function(v) { return (v >= 0 ? '+' : '') + v.toFixed(4) + '%'; };
+    var fmtK = function(v) {
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+      if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+      return v.toFixed(0);
+    };
+    var fmtN = function(v, dec) { return v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }); };
 
-    // Funding: positive = longs pay shorts
-    var fundingCls = d.fundingRate >= 0 ? 'funding-pos' : 'funding-neg';
-    var funding24Cls = d.fundingRate24h >= 0 ? 'funding-pos' : 'funding-neg';
-    var annualizedPct = d.fundingRate * 24 * 365;
+    // Funding: positive = longs pay shorts, negative = shorts pay longs
+    var payerLabel = d.fundingRate24h >= 0 ? 'Longs pay shorts' : 'Shorts pay longs';
+    var fundingAbs = Math.abs(d.fundingRate24h);
+    var fundingCls = d.fundingRate24h >= 0 ? 'funding-pos' : 'funding-neg';
+
+    // OI
+    var totalOI = d.longOI + d.shortOI;
+    var longPct = totalOI > 0 ? (d.longOI / totalOI * 100) : 50;
+    var notionalM = totalOI * d.markPrice / 1e6;
+
+    // Spread as %
+    var spreadPct = d.spreadBps / 100;
 
     // OI capacity
-    var totalOI = d.longOI + d.shortOI;
     var oiCapPct = d.maxOI > 0 ? (totalOI / d.maxOI * 100) : 0;
     var oiBarColor = oiCapPct > 80 ? '#ef4444' : oiCapPct > 50 ? '#fbbf24' : '#34d399';
 
-    // Long/short skew
-    var longPct = totalOI > 0 ? (d.longOI / totalOI * 100) : 50;
-
-    // Spread color
-    var spreadCls = d.spreadBps > 5 ? 'funding-neg' : d.spreadBps > 2 ? '' : 'funding-pos';
-
     var html = '<div class="market-grid">'
-      // Funding
+
+      // Funding — who pays whom, how much
       + '<div class="market-item">'
-      + '<div class="market-label">Funding Rate (1h)</div>'
-      + '<div class="market-value ' + fundingCls + '">' + fmtPct(d.fundingRate) + '</div>'
-      + '<div class="market-sub">~' + (annualizedPct >= 0 ? '+' : '') + fmtBN(annualizedPct, 1) + '% APR</div>'
+      + '<div class="market-label">Funding (24h avg)</div>'
+      + '<div class="market-value ' + fundingCls + '">' + payerLabel + '</div>'
+      + '<div class="market-sub">' + fundingAbs.toFixed(4) + '%/h &mdash; cost to hold a position on the paying side</div>'
       + '</div>'
 
-      // 24h avg funding
-      + '<div class="market-item">'
-      + '<div class="market-label">Avg Funding (24h)</div>'
-      + '<div class="market-value ' + funding24Cls + '">' + fmtPct(d.fundingRate24h) + '</div>'
-      + '<div class="market-sub">' + (d.fundingRate >= 0 ? 'Longs pay shorts' : 'Shorts pay longs') + '</div>'
-      + '</div>'
-
-      // Spread
+      // Spread — cost to enter/exit
       + '<div class="market-item">'
       + '<div class="market-label">Spread</div>'
-      + '<div class="market-value ' + spreadCls + '">' + fmtBN(d.spreadBps, 1) + ' bps</div>'
-      + '<div class="market-sub">$' + fmtBN(d.markPrice, 2) + ' mark</div>'
+      + '<div class="market-value">' + spreadPct.toFixed(3) + '%</div>'
+      + '<div class="market-sub">Gap between best buy and sell price &mdash; lower is cheaper to trade</div>'
       + '</div>'
 
-      // Open Interest
+      // Open Interest — market size
       + '<div class="market-item">'
       + '<div class="market-label">Open Interest</div>'
-      + '<div class="market-value">' + fmtBN(totalOI, 0) + ' SOL</div>'
-      + '<div class="market-sub">$' + fmtBN(totalOI * d.markPrice / 1e6, 1) + 'M notional</div>'
-      + '</div>'
-
-      // Long/Short ratio
-      + '<div class="market-item">'
-      + '<div class="market-label">Long / Short</div>'
-      + '<div class="market-value">' + fmtBN(d.longOI, 0) + ' / ' + fmtBN(d.shortOI, 0) + '</div>'
-      + '<div class="market-bar"><div class="market-bar-fill" style="width:' + longPct.toFixed(1) + '%;background:linear-gradient(90deg,#34d399 0%,#34d399 50%,#ef4444 50%,#ef4444 100%)"></div></div>'
-      + '<div class="market-sub">' + longPct.toFixed(1) + '% long</div>'
-      + '</div>'
-
-      // OI capacity
-      + '<div class="market-item">'
-      + '<div class="market-label">OI Capacity</div>'
-      + '<div class="market-value">' + fmtBN(oiCapPct, 1) + '%</div>'
+      + '<div class="market-value">$' + fmtN(notionalM, 1) + 'M</div>'
+      + '<div class="market-sub">' + fmtK(totalOI) + ' SOL in open positions &mdash; ' + oiCapPct.toFixed(0) + '% of ' + fmtK(d.maxOI) + ' max</div>'
       + '<div class="market-bar"><div class="market-bar-fill" style="width:' + Math.min(oiCapPct, 100).toFixed(1) + '%;background:' + oiBarColor + '"></div></div>'
-      + '<div class="market-sub">Max ' + fmtBN(d.maxOI, 0) + ' SOL</div>'
       + '</div>'
 
-      // Liquidity depth
-      + '<div class="market-item">'
-      + '<div class="market-label">AMM Depth (sqrtK)</div>'
-      + '<div class="market-value">' + fmtBN(d.sqrtK, 0) + '</div>'
-      + '<div class="market-sub">' + fmtBN(d.userLpShares, 0) + ' user LP shares</div>'
+      // Long/Short balance
+      + '<div class="market-item" style="grid-column:1/-1">'
+      + '<div class="market-label">Long vs Short</div>'
+      + '<div class="market-value">' + longPct.toFixed(1) + '% long / ' + (100 - longPct).toFixed(1) + '% short</div>'
+      + '<div class="market-bar"><div class="market-bar-fill" style="width:100%;background:linear-gradient(90deg,#34d399 0%,#34d399 ' + longPct.toFixed(1) + '%,#ef4444 ' + longPct.toFixed(1) + '%,#ef4444 100%)"></div></div>'
+      + '<div class="market-sub">' + fmtK(d.longOI) + ' SOL long / ' + fmtK(d.shortOI) + ' SOL short</div>'
       + '</div>'
 
-      // Users
+      // Open positions — how many traders
       + '<div class="market-item">'
-      + '<div class="market-label">Active Traders</div>'
-      + '<div class="market-value">' + fmtBN(d.usersWithPositions, 0) + '</div>'
-      + '<div class="market-sub">' + fmtBN(d.totalUsers, 0) + ' total users</div>'
+      + '<div class="market-label">Open Positions</div>'
+      + '<div class="market-value">' + fmtN(d.usersWithPositions, 0) + '</div>'
+      + '<div class="market-sub">Sub-accounts with open SOL-PERP positions on Drift</div>'
       + '</div>'
 
       + '</div>';
