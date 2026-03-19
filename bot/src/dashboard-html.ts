@@ -123,35 +123,57 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .strat-status.warmup { color: #5a5f73; }
 
   .strat-metrics {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 4px;
+    display: flex;
+    gap: 12px;
     margin-bottom: 8px;
+    flex-wrap: wrap;
   }
-  .metric { text-align: center; }
-  .metric-label { color: #5a5f73; font-size: 9px; text-transform: uppercase; }
-  .metric-value { color: #e2e5ed; font-weight: 600; font-size: 13px; }
+  .metric {
+    display: flex;
+    gap: 4px;
+    align-items: baseline;
+  }
+  .metric-label { color: #5a5f73; font-size: 11px; }
+  .metric-label::after { content: ':'; }
+  .metric-value { color: #e2e5ed; font-weight: 600; font-size: 12px; }
 
   .strat-thinking {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 2px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
     font-size: 11px;
   }
   .think-item {
     display: flex;
-    justify-content: space-between;
-    gap: 4px;
+    gap: 6px;
+    align-items: baseline;
+    line-height: 1.6;
   }
-  .think-key { color: #5a5f73; font-size: 10px; }
-  .think-val { color: #a5aac0; font-weight: 500; text-align: right; font-size: 10px; }
+  .think-key { color: #5a5f73; font-size: 11px; white-space: nowrap; min-width: 80px; }
+  .think-key::after { content: ':'; }
+  .think-val { color: #a5aac0; font-weight: 500; font-size: 11px; }
   .pnl-pos { color: #34d399; }
   .pnl-neg { color: #ef4444; }
   .pnl-zero { color: #5a5f73; }
-  .think-full { grid-column: 1 / -1; }
   .think-warn { color: #f59e0b; font-weight: 600; }
   .think-last { color: #c5c8d4; }
   .think-last-detail { color: #7a8099; font-style: italic; }
+
+  /* Price bar (oracle + mark + spread) */
+  .price-bar {
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    margin-left: 10px;
+    font-size: 12px;
+  }
+  .price-bar .pb-label { color: #5a5f73; font-size: 10px; }
+  .price-bar .pb-val { color: #e2e5ed; font-weight: 700; font-size: 15px; }
+  .price-bar .pb-mark { color: #a78bfa; font-weight: 600; font-size: 13px; }
+  .price-bar .pb-spread { font-size: 11px; font-weight: 600; }
+  .spread-pos { color: #34d399; }
+  .spread-neg { color: #ef4444; }
+  .spread-zero { color: #5a5f73; }
 
   /* Trades feed */
   .trades {
@@ -289,19 +311,26 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
 <div class="account-bar" id="account-bar">
   <div class="acct-item"><div class="acct-label">Balance</div><div class="acct-value" id="acct-balance">--</div></div>
-  <div class="acct-item"><div class="acct-label">Start</div><div class="acct-value neutral" id="acct-start">--</div></div>
-  <div class="acct-item"><div class="acct-label" id="acct-realized-label">Realized P&L</div><div class="acct-value" id="acct-realized">--</div></div>
-  <div class="acct-item"><div class="acct-label" id="acct-unrealized-label">Unrealized P&L</div><div class="acct-value" id="acct-unrealized">--</div></div>
-  <div class="acct-item"><div class="acct-label" id="acct-total-label">Total P&L</div><div class="acct-value" id="acct-total">--</div></div>
-  <div class="acct-item"><div class="acct-label" id="acct-roi-label">ROI (total)</div><div class="acct-value" id="acct-roi">--</div></div>
-  <div class="acct-item"><div class="acct-label" id="acct-trading-roi-label">ROI (trading)</div><div class="acct-value" id="acct-trading-roi">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-trading-label">Trading PnL</div><div class="acct-value" id="acct-trading">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-unrealized-label">Unrealized</div><div class="acct-value" id="acct-unrealized">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-daily-label">Today ROI</div><div class="acct-value" id="acct-daily">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-avg-label">Avg Daily</div><div class="acct-value" id="acct-avg">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-annual-label">Annualized</div><div class="acct-value" id="acct-annual">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-twr-label">TWR</div><div class="acct-value" id="acct-twr">--</div></div>
 </div>
 
 <div class="tab-bar" id="tab-bar"></div>
 
 <div class="main">
   <div class="chart-container">
-    <h2><span id="chart-market">SOL</span>/USD <span id="chart-price" style="color:#e2e5ed;font-size:16px;font-weight:700;margin-left:8px">--</span></h2>
+    <h2 style="display:flex;align-items:baseline">
+      <span id="chart-market">SOL</span>/USD
+      <span class="price-bar">
+        <span><span class="pb-label">Oracle </span><span class="pb-val" id="chart-price">--</span></span>
+        <span><span class="pb-label">Mark </span><span class="pb-mark" id="chart-mark">--</span></span>
+        <span><span class="pb-label">Spread </span><span class="pb-spread spread-zero" id="chart-spread">--</span></span>
+      </span>
+    </h2>
     <div class="chart-info" id="chart-legend"></div>
     <canvas id="chart"></canvas>
   </div>
@@ -339,11 +368,29 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   var activeMarket = 'SOL';
   var strategyStates = {};
   var strategyMarkets = {}; // name → market symbol
+  var driftPrices = {}; // symbol → { mark, oracle }
   var lastLeaderboard = null;
   var lastAccount = null;
 
   function fmt(n, d) {
     return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+
+  function updateDriftPriceDisplay(market, oraclePrice) {
+    var markEl = document.getElementById('chart-mark');
+    var spreadEl = document.getElementById('chart-spread');
+    var dp = driftPrices[market];
+    if (dp && dp.mark > 0) {
+      markEl.textContent = '$' + fmt(dp.mark, 2);
+      var spreadPct = ((dp.mark / oraclePrice) - 1) * 100;
+      var sign = spreadPct >= 0 ? '+' : '';
+      spreadEl.textContent = sign + spreadPct.toFixed(3) + '%';
+      spreadEl.className = 'pb-spread ' + (spreadPct > 0.01 ? 'spread-pos' : spreadPct < -0.01 ? 'spread-neg' : 'spread-zero');
+    } else {
+      markEl.textContent = '--';
+      spreadEl.textContent = '--';
+      spreadEl.className = 'pb-spread spread-zero';
+    }
   }
 
   /* ─── Chart ────────────────────────────────── */
@@ -555,52 +602,61 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     var d = lastAccount;
     var sign = function(v) { return v >= 0 ? '+' : ''; };
     var cls = function(v) { return v > 0.005 ? 'green' : v < -0.005 ? 'red' : 'neutral'; };
+    var fmtRoi = function(v) { return v != null ? sign(v) + fmt(Math.abs(v), 2) + '%' : '--'; };
 
     var balance = d.balanceUsdc;
-    var start = d.startBalanceUsdc;
-    var realized = d.realizedPnl;
-    var unrealized = d.unrealizedPnl;
-    var total = d.totalPnl;
     var trading = d.tradingPnl || 0;
+    var unrealized = d.unrealizedPnl;
+    var dailyRoi = d.dailyRoi;
+    var avgDailyRoi = d.avgDailyRoi;
+    var annualizedRoi = d.annualizedRoi;
+    var cumulativeTwr = d.cumulativeTwr;
 
-    // Per-strategy USDC data when a strategy tab is selected
+    // Per-strategy data when a strategy tab is selected
     var stratLabel = '';
     if (activeTab !== 'all' && d.perStrategy && d.perStrategy[activeTab]) {
       var ps = d.perStrategy[activeTab];
       balance = ps.balanceUsdc;
-      start = ps.startBalanceUsdc;
-      realized = ps.realizedPnl;
-      unrealized = ps.unrealizedPnl;
-      total = ps.totalPnl;
       trading = ps.tradingPnl || 0;
+      unrealized = ps.unrealizedPnl;
+      dailyRoi = ps.dailyRoi;
+      avgDailyRoi = ps.avgDailyRoi;
+      annualizedRoi = ps.annualizedRoi;
+      cumulativeTwr = ps.cumulativeTwr;
       stratLabel = ' (' + activeTab + ')';
     }
 
     document.getElementById('acct-balance').textContent = '$' + fmt(balance, 2);
-    document.getElementById('acct-start').textContent = '$' + fmt(start, 2);
-    document.getElementById('acct-realized-label').textContent = 'Realized P&L' + stratLabel;
-    document.getElementById('acct-unrealized-label').textContent = 'Unrealized P&L' + stratLabel;
-    document.getElementById('acct-total-label').textContent = 'Total P&L' + stratLabel;
-    document.getElementById('acct-roi-label').textContent = 'ROI (total)' + stratLabel;
-    document.getElementById('acct-trading-roi-label').textContent = 'ROI (trading)' + stratLabel;
 
-    var realEl = document.getElementById('acct-realized');
-    realEl.textContent = sign(realized) + '$' + fmt(Math.abs(realized), 2);
-    realEl.className = 'acct-value ' + cls(realized);
+    var tradingEl = document.getElementById('acct-trading');
+    tradingEl.textContent = sign(trading) + '$' + fmt(Math.abs(trading), 2);
+    tradingEl.className = 'acct-value ' + cls(trading);
+    document.getElementById('acct-trading-label').textContent = 'Trading PnL' + stratLabel;
+
     var unrEl = document.getElementById('acct-unrealized');
     unrEl.textContent = sign(unrealized) + '$' + fmt(Math.abs(unrealized), 2);
     unrEl.className = 'acct-value ' + cls(unrealized);
-    var totEl = document.getElementById('acct-total');
-    totEl.textContent = sign(total) + '$' + fmt(Math.abs(total), 2);
-    totEl.className = 'acct-value ' + cls(total);
-    var roiEl = document.getElementById('acct-roi');
-    var roiPct = start > 0 ? (total / start) * 100 : 0;
-    roiEl.textContent = sign(roiPct) + fmt(Math.abs(roiPct), 2) + '%';
-    roiEl.className = 'acct-value ' + cls(roiPct);
-    var tradingRoiEl = document.getElementById('acct-trading-roi');
-    var tradingRoiPct = start > 0 ? (trading / start) * 100 : 0;
-    tradingRoiEl.textContent = sign(tradingRoiPct) + fmt(Math.abs(tradingRoiPct), 2) + '%';
-    tradingRoiEl.className = 'acct-value ' + cls(tradingRoiPct);
+    document.getElementById('acct-unrealized-label').textContent = 'Unrealized' + stratLabel;
+
+    var dailyEl = document.getElementById('acct-daily');
+    dailyEl.textContent = fmtRoi(dailyRoi);
+    dailyEl.className = 'acct-value ' + (dailyRoi != null ? cls(dailyRoi) : 'neutral');
+    document.getElementById('acct-daily-label').textContent = 'Today ROI' + stratLabel;
+
+    var avgEl = document.getElementById('acct-avg');
+    avgEl.textContent = fmtRoi(avgDailyRoi);
+    avgEl.className = 'acct-value ' + (avgDailyRoi != null ? cls(avgDailyRoi) : 'neutral');
+    document.getElementById('acct-avg-label').textContent = 'Avg Daily' + stratLabel;
+
+    var annEl = document.getElementById('acct-annual');
+    annEl.textContent = fmtRoi(annualizedRoi);
+    annEl.className = 'acct-value ' + (annualizedRoi != null ? cls(annualizedRoi) : 'neutral');
+    document.getElementById('acct-annual-label').textContent = 'Annualized' + stratLabel;
+
+    var twrEl = document.getElementById('acct-twr');
+    twrEl.textContent = fmtRoi(cumulativeTwr);
+    twrEl.className = 'acct-value ' + (cumulativeTwr != null ? cls(cumulativeTwr) : 'neutral');
+    document.getElementById('acct-twr-label').textContent = 'TWR' + stratLabel;
   }
 
   window._setTab = function(name) {
@@ -610,7 +666,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     document.getElementById('chart-market').textContent = activeMarket;
     var mktPrice = (marketPriceHistories[activeMarket] || []);
     if (mktPrice.length > 0) {
-      document.getElementById('chart-price').textContent = '$' + fmt(mktPrice[mktPrice.length - 1].price, 2);
+      var lastP = mktPrice[mktPrice.length - 1].price;
+      document.getElementById('chart-price').textContent = '$' + fmt(lastP, 2);
+      updateDriftPriceDisplay(activeMarket, lastP);
     }
     if (lastLeaderboard) renderStrategies(lastLeaderboard);
     renderFeed();
@@ -684,16 +742,16 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
       html += '<div class="strat-card">'
         + '<div class="strat-header">'
-        + '<span class="strat-name">' + e.name + ' <span style="color:#5a5f73;font-size:11px;font-weight:400">' + e.type + (e.market ? ' · ' + e.market : '') + (e.subAccountId !== undefined ? ' · sub ' + e.subAccountId : '') + '</span></span>'
+        + '<span class="strat-name">' + e.name + ' <span style="color:#5a5f73;font-size:11px;font-weight:400">' + (e.market || '') + (e.subAccountId !== undefined ? ' · sub ' + e.subAccountId : '') + '</span></span>'
         + '<span class="strat-status ' + statusClass + '">' + statusStr + '</span>'
         + '</div>'
         + '<div class="strat-metrics">'
-        + '<div class="metric"><div class="metric-label">PnL (total)</div><div class="metric-value ' + pnlClass + '">' + pnlSign + '$' + fmt(Math.abs(pnlVal), 2) + '</div></div>'
-        + '<div class="metric"><div class="metric-label">PnL (trading)</div><div class="metric-value ' + tradingClass + '">' + tradingSign + '$' + fmt(Math.abs(tradingVal), 2) + '</div></div>'
-        + '<div class="metric"><div class="metric-label">ROI (trading)</div><div class="metric-value ' + tradingClass + '">' + tradingSign + fmt(Math.abs(tradingRoi), 2) + '%</div></div>'
-        + '<div class="metric"><div class="metric-label">Trades</div><div class="metric-value">' + m.totalTrades + '</div></div>'
-        + '<div class="metric"><div class="metric-label">Win Rate</div><div class="metric-value">' + m.winRate.toFixed(0) + '%</div></div>'
-        + '<div class="metric"><div class="metric-label">Sharpe</div><div class="metric-value">' + m.sharpe.toFixed(2) + '</div></div>'
+        + '<div class="metric"><span class="metric-label">PnL</span><span class="metric-value ' + pnlClass + '">' + pnlSign + '$' + fmt(Math.abs(pnlVal), 2) + '</span></div>'
+        + '<div class="metric"><span class="metric-label">Trading</span><span class="metric-value ' + tradingClass + '">' + tradingSign + '$' + fmt(Math.abs(tradingVal), 2) + '</span></div>'
+        + '<div class="metric"><span class="metric-label">ROI</span><span class="metric-value ' + tradingClass + '">' + tradingSign + fmt(Math.abs(tradingRoi), 2) + '%</span></div>'
+        + '<div class="metric"><span class="metric-label">Trades</span><span class="metric-value">' + m.totalTrades + '</span></div>'
+        + '<div class="metric"><span class="metric-label">WR</span><span class="metric-value">' + m.winRate.toFixed(0) + '%</span></div>'
+        + '<div class="metric"><span class="metric-label">Sharpe</span><span class="metric-value">' + m.sharpe.toFixed(2) + '</span></div>'
         + '</div>'
         + '<div class="strat-thinking">';
 
@@ -705,12 +763,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         if (key === 'ATR warning') valClass = 'think-val think-warn';
         if (key === 'last trade') valClass = 'think-val think-last';
         if (key === 'last exit') valClass = 'think-val think-last-detail';
-        var span = key === 'last trade' || key === 'last exit' || key === 'ATR warning' ? 'full' : '';
-        if (span === 'full') {
-          html += '<div class="think-item think-full"><span class="think-key">' + key + '</span><span class="' + valClass + '">' + t[key] + '</span></div>';
-        } else {
-          html += '<div class="think-item"><span class="think-key">' + key + '</span><span class="' + valClass + '">' + t[key] + '</span></div>';
-        }
+        html += '<div class="think-item"><span class="think-key">' + key + '</span><span class="' + valClass + '">' + t[key] + '</span></div>';
       }
 
       html += '</div></div>';
@@ -882,6 +935,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         }
       }
 
+      // Track Drift mark prices
+      if (d.driftPrices) {
+        for (var sym in d.driftPrices) {
+          driftPrices[sym] = d.driftPrices[sym];
+        }
+      }
+
       // Fallback: always track SOL in the legacy array
       priceHistory.push({ time: d.timestamp, price: d.sol });
       if (priceHistory.length > MAX_CHART_POINTS) priceHistory.shift();
@@ -890,6 +950,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       var displayPrice = (d.prices && d.prices[activeMarket]) || d.sol;
       document.getElementById('chart-price').textContent = '$' + fmt(displayPrice, 2);
       document.getElementById('chart-market').textContent = activeMarket;
+
+      // Update mark price + spread
+      updateDriftPriceDisplay(activeMarket, displayPrice);
 
       drawChart();
     });

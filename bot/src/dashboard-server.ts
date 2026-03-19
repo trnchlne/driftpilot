@@ -120,6 +120,10 @@ export class DashboardServer {
       tradingRoi: this.lastAccount.startBalanceUsdc > 0
         ? (((this.lastAccount.tradingPnl ?? 0) / this.lastAccount.startBalanceUsdc) * 100)
         : 0,
+      dailyRoi: this.lastAccount.dailyRoi ?? null,
+      avgDailyRoi: this.lastAccount.avgDailyRoi ?? null,
+      annualizedRoi: this.lastAccount.annualizedRoi ?? null,
+      cumulativeTwr: this.lastAccount.cumulativeTwr ?? null,
       perStrategy: this.lastAccount.perStrategy ?? null,
       lastUpdate: new Date(this.lastAccount.timestamp * 1000).toISOString(),
     } : null;

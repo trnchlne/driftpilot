@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events';
 export interface PriceEvent {
   sol: number;
   timestamp: number;
-  prices?: Record<string, number>; // per-market prices (e.g. { SOL: 89.5, HYPE: 41.2 })
+  prices?: Record<string, number>; // per-market oracle prices (e.g. { SOL: 89.5, HYPE: 41.2 })
+  driftPrices?: Record<string, { mark: number; oracle: number }>; // Drift mark vs oracle
 }
 
 export interface EntryEvent {
@@ -58,6 +59,10 @@ export interface SubAccountPnl {
   realizedPnl: number;
   totalPnl: number;
   tradingPnl: number;
+  dailyRoi?: number;
+  avgDailyRoi?: number;
+  annualizedRoi?: number;
+  cumulativeTwr?: number;
 }
 
 export interface MarketEvent {
@@ -83,6 +88,10 @@ export interface AccountEvent {
   tradingPnl: number;
   timestamp: number;
   perStrategy?: Record<string, SubAccountPnl>;
+  dailyRoi?: number;
+  avgDailyRoi?: number;
+  annualizedRoi?: number;
+  cumulativeTwr?: number;
 }
 
 class DashboardBus extends EventEmitter {

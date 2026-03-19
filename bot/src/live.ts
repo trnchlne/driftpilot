@@ -39,6 +39,9 @@ import { BankrollManager } from './bankroll.js';
 import { DriftExecutor } from './executor.js';
 import { LiveStateManager } from './live-state.js';
 import { LiveTrader } from './live-trader.js';
+import { DriftPriceStream } from './drift-price.js';
+import { RoiTracker } from './roi-tracker.js';
+import type { RoiResult } from './roi-tracker.js';
 
 function createLiveStrategy(
   cfg: StrategyConfig,
@@ -292,6 +295,30 @@ async function main(): Promise<void> {
   const feed = new PriceFeed(uniqueFeedIds);
   dashboard.setFeed(feed);
 
+  // Start Drift mark price stream (DLOB websocket)
+  const driftMarketNames = warmupMarkets.map(m => {
+    const sym = Object.entries(MARKETS).find(([, v]) => v.feedId === m.feedId)?.[0] ?? 'SOL';
+    return `${sym}-PERP`;
+  });
+  const driftPriceStream = new DriftPriceStream(driftMarketNames);
+  const driftPriceCache: Record<string, { mark: number; oracle: number }> = {};
+  driftPriceStream.onPrice((dp) => {
+    // Extract symbol from market name (e.g. "SOL-PERP" → "SOL")
+    const sym = dp.market.replace('-PERP', '');
+    driftPriceCache[sym] = { mark: dp.markPrice, oracle: dp.oraclePrice };
+  });
+  driftPriceStream.start();
+
+  // Start ROI tracker (fetches from Drift data API, no local state)
+  const subToStrategy: Record<number, string> = {};
+  for (const [name, subId] of Object.entries(activeSubAccountMap)) {
+    subToStrategy[subId] = name;
+  }
+  const roiTracker = new RoiTracker(wallet.publicKey, activeSubAccountIds, subToStrategy);
+  let latestRoiData: RoiResult | null = null;
+  roiTracker.onUpdate((data) => { latestRoiData = data; });
+  roiTracker.start();
+
   // Track prices + account balance + market data
   let lastSol = 0;
   const marketPrices: Record<string, number> = {}; // symbol → last price
@@ -327,7 +354,12 @@ async function main(): Promise<void> {
 
     // Emit price event with all market prices (throttled by dashboardBus)
     if (lastSol > 0) {
-      dashboardBus.emitPrice({ sol: lastSol, timestamp: Date.now(), prices: { ...marketPrices } });
+      dashboardBus.emitPrice({
+        sol: lastSol,
+        timestamp: Date.now(),
+        prices: { ...marketPrices },
+        driftPrices: Object.keys(driftPriceCache).length > 0 ? { ...driftPriceCache } : undefined,
+      });
     }
 
     // Emit account balance periodically (aggregate all active subaccounts)
@@ -349,11 +381,12 @@ async function main(): Promise<void> {
         tradingPnl += subBalances[subId].tradingPnl;
       }
 
-      // Build per-strategy breakdown
-      const perStrategy: Record<string, { balanceUsdc: number; unrealizedPnl: number; startBalanceUsdc: number; realizedPnl: number; totalPnl: number; tradingPnl: number }> = {};
+      // Build per-strategy breakdown (with ROI data if available)
+      const perStrategy: Record<string, { balanceUsdc: number; unrealizedPnl: number; startBalanceUsdc: number; realizedPnl: number; totalPnl: number; tradingPnl: number; dailyRoi?: number; avgDailyRoi?: number; annualizedRoi?: number; cumulativeTwr?: number }> = {};
       for (const [stratName, subId] of Object.entries(activeSubAccountMap)) {
         const sb = subBalances[subId];
         if (sb) {
+          const roi = latestRoiData?.perSubAccount[subId];
           perStrategy[stratName] = {
             balanceUsdc: sb.totalCollateral,
             unrealizedPnl: sb.unrealizedPnl,
@@ -361,12 +394,14 @@ async function main(): Promise<void> {
             realizedPnl: sb.allTimePnl - sb.unrealizedPnl,
             totalPnl: sb.allTimePnl,
             tradingPnl: sb.tradingPnl,
+            ...(roi ? { dailyRoi: roi.dailyRoi, avgDailyRoi: roi.avgDailyRoi, annualizedRoi: roi.annualizedRoi, cumulativeTwr: roi.cumulativeTwr } : {}),
           };
         }
       }
 
       if (totalCollateral > 0) {
         const realizedPnl = allTimePnl - unrealizedPnl;
+        const aggRoi = latestRoiData?.aggregate;
         dashboardBus.emitAccount({
           balanceUsdc: totalCollateral,
           unrealizedPnl,
@@ -376,6 +411,7 @@ async function main(): Promise<void> {
           tradingPnl,
           timestamp: now,
           perStrategy,
+          ...(aggRoi ? { dailyRoi: aggRoi.dailyRoi, avgDailyRoi: aggRoi.avgDailyRoi, annualizedRoi: aggRoi.annualizedRoi, cumulativeTwr: aggRoi.cumulativeTwr } : {}),
         });
       }
     }
@@ -415,6 +451,8 @@ async function main(): Promise<void> {
     console.log(`\n[live] ${signal} — shutting down...`);
     console.log('[live] SL triggers remain on-chain for protection');
     feed.stop();
+    driftPriceStream.stop();
+    roiTracker.stop();
     arena.stop();
     dashboard.stop();
     dashboardBus.shutdown();
