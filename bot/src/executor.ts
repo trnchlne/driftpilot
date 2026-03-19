@@ -362,7 +362,7 @@ export class DriftExecutor {
    * trading-only PnL (settledPerpPnl + unrealizedPerpPnl).
    */
   readAccountBalance(subAccountId: number): {
-    totalCollateral: number; unrealizedPnl: number; allTimePnl: number; tradingPnl: number;
+    totalCollateral: number; unrealizedPnl: number; allTimePnl: number; tradingPnl: number; settledPerpPnl: number;
   } {
     try {
       const user = this.client.getUser(subAccountId);
@@ -371,9 +371,9 @@ export class DriftExecutor {
       const allTimePnl = user.getTotalAllTimePnl().toNumber() / 1e6;
       const settledPerpPnl = user.getUserAccount().settledPerpPnl.toNumber() / 1e6;
       const tradingPnl = settledPerpPnl + unrealizedPnl;
-      return { totalCollateral, unrealizedPnl, allTimePnl, tradingPnl };
+      return { totalCollateral, unrealizedPnl, allTimePnl, tradingPnl, settledPerpPnl };
     } catch {
-      return { totalCollateral: 0, unrealizedPnl: 0, allTimePnl: 0, tradingPnl: 0 };
+      return { totalCollateral: 0, unrealizedPnl: 0, allTimePnl: 0, tradingPnl: 0, settledPerpPnl: 0 };
     }
   }
 

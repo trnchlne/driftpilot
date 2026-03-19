@@ -1,12 +1,12 @@
 /**
  * ROI Tracker — computes time-weighted daily returns from Drift data API.
  *
- * Fetches daily account snapshots + deposit/withdrawal history,
- * then calculates daily ROI, average daily ROI, annualized ROI,
- * and cumulative TWR (time-weighted return). Handles deposits
- * correctly so adding funds doesn't inflate ROI.
+ * Uses daily account snapshots (balance + cumulative PnL) to derive
+ * net deposits per day: deposits = balanceChange - tradingPnlChange.
+ * Then computes deposit-adjusted daily returns, TWR, and annualized ROI.
  *
  * No local state — everything is recomputed from API data on each refresh.
+ * Single API call per refresh via the authority snapshots endpoint.
  */
 
 import { getUserAccountPublicKeySync } from '@drift-labs/sdk';
@@ -19,18 +19,13 @@ const SNAPSHOT_DAYS = 100;
 
 interface DailySnapshot {
   ts: number;
-  accountBalance: number;
+  accountBalance: number;   // USD total value
   unrealizedPnl: number;
-}
-
-interface DepositRecord {
-  ts: number;
-  amount: number;
-  direction: 'deposit' | 'withdraw';
+  cumulativeSettledPnl: number;  // settled perp PnL only (not spot/SOL appreciation)
 }
 
 export interface SubRoi {
-  dailyRoi: number;      // today's return %
+  dailyRoi: number;      // today's return % (live, since last UTC midnight snapshot)
   avgDailyRoi: number;   // geometric mean of daily returns %
   annualizedRoi: number;  // (1 + avgDaily)^365 - 1, as %
   cumulativeTwr: number;  // cumulative TWR since inception %
@@ -41,24 +36,31 @@ export interface RoiResult {
   perSubAccount: Record<number, SubRoi>;
 }
 
+/** Live account value for computing today's real-time return */
+export interface LiveValue {
+  subAccountId: number;
+  totalCollateral: number;  // USD
+  unrealizedPnl: number;   // USD
+  settledPerpPnl: number;  // USD cumulative
+}
+
 type RoiCallback = (data: RoiResult) => void;
 
 export class RoiTracker {
   private readonly authority: PublicKey;
   private readonly subAccountIds: number[];
   private readonly accountIds: Map<number, string>; // subId → base58 account pubkey
-  private readonly subToStrategy: Record<number, string>;
   private callback: RoiCallback | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private liveValues: Map<number, LiveValue> = new Map();
 
   constructor(
     authority: PublicKey,
     subAccountIds: number[],
-    subToStrategy: Record<number, string>,
+    _subToStrategy: Record<number, string>,
   ) {
     this.authority = authority;
     this.subAccountIds = subAccountIds;
-    this.subToStrategy = subToStrategy;
 
     // Derive Drift account pubkeys for each subaccount
     this.accountIds = new Map();
@@ -66,6 +68,11 @@ export class RoiTracker {
       const pubkey = getUserAccountPublicKeySync(DRIFT_PROGRAM_ID, authority, subId);
       this.accountIds.set(subId, pubkey.toBase58());
     }
+  }
+
+  /** Feed live account values from the SDK (called from live.ts on each account emit) */
+  updateLiveValue(lv: LiveValue): void {
+    this.liveValues.set(lv.subAccountId, lv);
   }
 
   onUpdate(cb: RoiCallback): void {
@@ -87,30 +94,17 @@ export class RoiTracker {
   private async refresh(): Promise<void> {
     try {
       const authorityId = this.authority.toBase58();
-
-      // Fetch snapshots for all subaccounts in one call
       const snapshotsByAccount = await this.fetchSnapshots(authorityId);
-
-      // Fetch deposits per subaccount in parallel
-      const depositsByAccount = new Map<number, DepositRecord[]>();
-      await Promise.all(
-        this.subAccountIds.map(async (subId) => {
-          const accountId = this.accountIds.get(subId)!;
-          const deposits = await this.fetchDeposits(accountId);
-          depositsByAccount.set(subId, deposits);
-        }),
-      );
 
       // Compute ROI per subaccount
       const perSubAccount: Record<number, SubRoi> = {};
       for (const subId of this.subAccountIds) {
         const snapshots = snapshotsByAccount.get(subId) ?? [];
-        const deposits = depositsByAccount.get(subId) ?? [];
-        perSubAccount[subId] = this.computeSubRoi(snapshots, deposits);
+        perSubAccount[subId] = this.computeSubRoi(snapshots, subId);
       }
 
-      // Compute aggregate (value-weighted daily returns)
-      const aggregate = this.computeAggregate(snapshotsByAccount, depositsByAccount);
+      // Compute aggregate
+      const aggregate = this.computeAggregate(snapshotsByAccount);
 
       const result: RoiResult = { aggregate, perSubAccount };
       if (this.callback) this.callback(result);
@@ -124,7 +118,7 @@ export class RoiTracker {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Snapshots API returned ${res.status}`);
 
-    const data = await res.json();
+    const data: any = await res.json();
     const result = new Map<number, DailySnapshot[]>();
     const activeSet = new Set(this.subAccountIds);
 
@@ -133,7 +127,6 @@ export class RoiTracker {
     if (!Array.isArray(accounts)) return result;
 
     for (const acct of accounts) {
-      // Match accountId to our subaccounts
       const accountId: string = acct.accountId ?? acct.user;
       let subId: number | null = null;
       for (const [sid, aid] of this.accountIds) {
@@ -150,6 +143,7 @@ export class RoiTracker {
           ts: Number(snap.ts),
           accountBalance: parseFloat(snap.accountBalance ?? '0'),
           unrealizedPnl: parseFloat(snap.unrealizedPnl ?? '0'),
+          cumulativeSettledPnl: parseFloat(snap.cumulativeSettledPnl ?? '0'),
         });
       }
       snapshots.sort((a, b) => a.ts - b.ts);
@@ -159,98 +153,64 @@ export class RoiTracker {
     return result;
   }
 
-  private async fetchDeposits(accountId: string): Promise<DepositRecord[]> {
-    const records: DepositRecord[] = [];
-    let url: string | null = `${DATA_API}/user/${accountId}/deposits`;
-
-    while (url) {
-      const res: Response = await fetch(url);
-      if (!res.ok) break;
-
-      const data: any = await res.json();
-      const items = data.records ?? data.data ?? data;
-      if (!Array.isArray(items)) break;
-
-      for (const item of items) {
-        // Skip inter-subaccount transfers
-        if (item.explanation === 'transfer') continue;
-
-        records.push({
-          ts: Number(item.ts),
-          amount: parseFloat(item.amount ?? '0') / 1e6, // QUOTE_PRECISION
-          direction: item.direction,
-        });
-      }
-
-      // Pagination
-      url = data.meta?.nextPage ? `${DATA_API}/user/${accountId}/deposits?page=${data.meta.nextPage}` : null;
-    }
-
-    return records;
-  }
-
-  private computeSubRoi(snapshots: DailySnapshot[], deposits: DepositRecord[]): SubRoi {
+  /**
+   * Compute daily returns for a single subaccount.
+   *
+   * Uses settledPnl + unrealizedPnl as the trading-only metric.
+   * dailyReturn = tradingPnlChange / startValue
+   * This ignores deposit/withdrawal flows and SOL spot price changes.
+   *
+   * For "today" (since last UTC midnight snapshot), uses live SDK values
+   * instead of snapshot data so the dashboard shows real-time today's return.
+   */
+  private computeSubRoi(snapshots: DailySnapshot[], subId: number): SubRoi {
     const zero: SubRoi = { dailyRoi: 0, avgDailyRoi: 0, annualizedRoi: 0, cumulativeTwr: 0 };
-    if (snapshots.length < 2) return zero;
+    if (snapshots.length < 1) return zero;
 
     const dailyReturns: number[] = [];
 
+    // Historical daily returns (completed days)
     for (let i = 1; i < snapshots.length; i++) {
       const prev = snapshots[i - 1];
       const curr = snapshots[i];
 
       const startValue = prev.accountBalance + prev.unrealizedPnl;
-      const endValue = curr.accountBalance + curr.unrealizedPnl;
+      if (startValue <= 0.01) continue;
 
-      if (startValue <= 0) continue;
+      // Trading PnL = change in (settledPnl + unrealizedPnl)
+      const tradingPnl = (curr.cumulativeSettledPnl + curr.unrealizedPnl)
+                        - (prev.cumulativeSettledPnl + prev.unrealizedPnl);
 
-      // Sum deposits/withdrawals that happened between prev and curr snapshots
-      let netDeposits = 0;
-      for (const d of deposits) {
-        if (d.ts > prev.ts && d.ts <= curr.ts) {
-          netDeposits += d.direction === 'deposit' ? d.amount : -d.amount;
-        }
+      dailyReturns.push(tradingPnl / startValue);
+    }
+
+    // Today's live return (last snapshot → current SDK value)
+    const lastSnap = snapshots[snapshots.length - 1];
+    const live = this.liveValues.get(subId);
+    let todayRoi = 0;
+
+    if (live && lastSnap) {
+      const startValue = lastSnap.accountBalance + lastSnap.unrealizedPnl;
+      if (startValue > 0.01) {
+        const tradingPnl = (live.settledPerpPnl + live.unrealizedPnl)
+                          - (lastSnap.cumulativeSettledPnl + lastSnap.unrealizedPnl);
+        todayRoi = (tradingPnl / startValue) * 100;
       }
-
-      const dailyReturn = (endValue - startValue - netDeposits) / startValue;
-      dailyReturns.push(dailyReturn);
     }
 
-    if (dailyReturns.length === 0) return zero;
-
-    // Cumulative TWR = product of (1 + r_i) - 1
-    let product = 1;
-    for (const r of dailyReturns) {
-      product *= Math.max(0, 1 + r); // clamp to prevent NaN
-    }
-    const cumulativeTwr = (product - 1) * 100;
-
-    // Geometric mean daily return
-    const avgDaily = Math.pow(product, 1 / dailyReturns.length) - 1;
-    const annualized = (Math.pow(1 + avgDaily, 365) - 1) * 100;
-
-    // Today's ROI = last daily return
-    const todayRoi = dailyReturns[dailyReturns.length - 1] * 100;
-
-    return {
-      dailyRoi: todayRoi,
-      avgDailyRoi: avgDaily * 100,
-      annualizedRoi: annualized,
-      cumulativeTwr,
-    };
+    const historical = this.chainReturns(dailyReturns);
+    historical.dailyRoi = todayRoi;
+    return historical;
   }
 
-  private computeAggregate(
-    snapshotsByAccount: Map<number, DailySnapshot[]>,
-    depositsByAccount: Map<number, DepositRecord[]>,
-  ): SubRoi {
-    // Collect all unique timestamps across all subaccounts
+  /** Compute aggregate daily returns across all subaccounts (value-weighted). */
+  private computeAggregate(snapshotsByAccount: Map<number, DailySnapshot[]>): SubRoi {
+    // Collect all unique timestamps
     const allTimestamps = new Set<number>();
     for (const [, snaps] of snapshotsByAccount) {
       for (const s of snaps) allTimestamps.add(s.ts);
     }
     const sortedTs = [...allTimestamps].sort((a, b) => a - b);
-
     if (sortedTs.length < 2) {
       return { dailyRoi: 0, avgDailyRoi: 0, annualizedRoi: 0, cumulativeTwr: 0 };
     }
@@ -274,34 +234,54 @@ export class RoiTracker {
       if (!prevSnaps || !currSnaps) continue;
 
       let totalStartValue = 0;
-      let totalEndValue = 0;
-      let totalNetDeposits = 0;
+      let totalPnlReturn = 0;
 
       for (const subId of this.subAccountIds) {
         const prev = prevSnaps.get(subId);
         const curr = currSnaps.get(subId);
         if (!prev || !curr) continue;
 
-        totalStartValue += prev.accountBalance + prev.unrealizedPnl;
-        totalEndValue += curr.accountBalance + curr.unrealizedPnl;
+        const startValue = prev.accountBalance + prev.unrealizedPnl;
+        if (startValue <= 0.01) continue;
 
-        const deposits = depositsByAccount.get(subId) ?? [];
-        for (const d of deposits) {
-          if (d.ts > prevTs && d.ts <= currTs) {
-            totalNetDeposits += d.direction === 'deposit' ? d.amount : -d.amount;
-          }
-        }
+        const tradingPnl = (curr.cumulativeSettledPnl + curr.unrealizedPnl)
+                          - (prev.cumulativeSettledPnl + prev.unrealizedPnl);
+
+        totalStartValue += startValue;
+        totalPnlReturn += tradingPnl;
       }
 
-      if (totalStartValue <= 0) continue;
-
-      const dailyReturn = (totalEndValue - totalStartValue - totalNetDeposits) / totalStartValue;
-      dailyReturns.push(dailyReturn);
+      if (totalStartValue <= 0.01) continue;
+      dailyReturns.push(totalPnlReturn / totalStartValue);
     }
 
-    if (dailyReturns.length === 0) {
-      return { dailyRoi: 0, avgDailyRoi: 0, annualizedRoi: 0, cumulativeTwr: 0 };
+    // Today's live return (aggregate)
+    const lastTs = sortedTs[sortedTs.length - 1];
+    const lastSnaps = snapLookup.get(lastTs);
+    let todayStart = 0;
+    let todayTradingPnl = 0;
+    if (lastSnaps) {
+      for (const subId of this.subAccountIds) {
+        const snap = lastSnaps.get(subId);
+        const live = this.liveValues.get(subId);
+        if (!snap || !live) continue;
+        const sv = snap.accountBalance + snap.unrealizedPnl;
+        if (sv <= 0.01) continue;
+        todayStart += sv;
+        todayTradingPnl += (live.settledPerpPnl + live.unrealizedPnl)
+                          - (snap.cumulativeSettledPnl + snap.unrealizedPnl);
+      }
     }
+
+    const historical = this.chainReturns(dailyReturns);
+    historical.dailyRoi = todayStart > 0.01 ? (todayTradingPnl / todayStart) * 100 : 0;
+    return historical;
+  }
+
+  /** Chain-multiply daily returns into TWR, avg daily, annualized. */
+  private chainReturns(dailyReturns: number[]): SubRoi {
+    const zero: SubRoi = { dailyRoi: 0, avgDailyRoi: 0, annualizedRoi: 0, cumulativeTwr: 0 };
+    if (dailyReturns.length === 0) return zero;
 
     let product = 1;
     for (const r of dailyReturns) {
