@@ -59,7 +59,7 @@ export interface SubAccountPnl {
   realizedPnl: number;
   totalPnl: number;
   tradingPnl: number;
-  dailyRoi?: number;
+  yesterdayRoi?: number;
   avgDailyRoi?: number;
   annualizedRoi?: number;
   cumulativeTwr?: number;
@@ -88,7 +88,7 @@ export interface AccountEvent {
   tradingPnl: number;
   timestamp: number;
   perStrategy?: Record<string, SubAccountPnl>;
-  dailyRoi?: number;
+  yesterdayRoi?: number;
   avgDailyRoi?: number;
   annualizedRoi?: number;
   cumulativeTwr?: number;

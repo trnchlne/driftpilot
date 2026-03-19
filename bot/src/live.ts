@@ -43,6 +43,7 @@ import { DriftPriceStream } from './drift-price.js';
 import { RoiTracker } from './roi-tracker.js';
 import type { RoiResult } from './roi-tracker.js';
 
+
 function createLiveStrategy(
   cfg: StrategyConfig,
   executor: DriftExecutor,
@@ -372,21 +373,13 @@ async function main(): Promise<void> {
       let tradingPnl = 0;
 
       // Per-subaccount balances (dedup since multiple strategies may share a sub)
-      const subBalances: Record<number, { totalCollateral: number; unrealizedPnl: number; allTimePnl: number; tradingPnl: number; settledPerpPnl: number }> = {};
+      const subBalances: Record<number, { totalCollateral: number; unrealizedPnl: number; allTimePnl: number; tradingPnl: number }> = {};
       for (const subId of activeSubAccountIds) {
         subBalances[subId] = executor.readAccountBalance(subId);
         totalCollateral += subBalances[subId].totalCollateral;
         unrealizedPnl += subBalances[subId].unrealizedPnl;
         allTimePnl += subBalances[subId].allTimePnl;
         tradingPnl += subBalances[subId].tradingPnl;
-
-        // Feed live values to ROI tracker for real-time today's return
-        roiTracker.updateLiveValue({
-          subAccountId: subId,
-          totalCollateral: subBalances[subId].totalCollateral,
-          unrealizedPnl: subBalances[subId].unrealizedPnl,
-          settledPerpPnl: subBalances[subId].settledPerpPnl,
-        });
       }
 
       // Build per-strategy breakdown (with ROI data if available)
@@ -402,7 +395,7 @@ async function main(): Promise<void> {
             realizedPnl: sb.allTimePnl - sb.unrealizedPnl,
             totalPnl: sb.allTimePnl,
             tradingPnl: sb.tradingPnl,
-            ...(roi ? { dailyRoi: roi.dailyRoi, avgDailyRoi: roi.avgDailyRoi, annualizedRoi: roi.annualizedRoi, cumulativeTwr: roi.cumulativeTwr } : {}),
+            ...(roi ? { yesterdayRoi: roi.yesterdayRoi, avgDailyRoi: roi.avgDailyRoi, annualizedRoi: roi.annualizedRoi, cumulativeTwr: roi.cumulativeTwr } : {}),
           };
         }
       }
@@ -419,7 +412,7 @@ async function main(): Promise<void> {
           tradingPnl,
           timestamp: now,
           perStrategy,
-          ...(aggRoi ? { dailyRoi: aggRoi.dailyRoi, avgDailyRoi: aggRoi.avgDailyRoi, annualizedRoi: aggRoi.annualizedRoi, cumulativeTwr: aggRoi.cumulativeTwr } : {}),
+          ...(aggRoi ? { yesterdayRoi: aggRoi.yesterdayRoi, avgDailyRoi: aggRoi.avgDailyRoi, annualizedRoi: aggRoi.annualizedRoi, cumulativeTwr: aggRoi.cumulativeTwr } : {}),
         });
       }
     }

@@ -313,7 +313,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="acct-item"><div class="acct-label">Balance</div><div class="acct-value" id="acct-balance">--</div></div>
   <div class="acct-item"><div class="acct-label" id="acct-trading-label">Trading PnL</div><div class="acct-value" id="acct-trading">--</div></div>
   <div class="acct-item"><div class="acct-label" id="acct-unrealized-label">Unrealized</div><div class="acct-value" id="acct-unrealized">--</div></div>
-  <div class="acct-item"><div class="acct-label" id="acct-daily-label">Today ROI</div><div class="acct-value" id="acct-daily">--</div></div>
+  <div class="acct-item"><div class="acct-label" id="acct-daily-label">Yesterday</div><div class="acct-value" id="acct-daily">--</div></div>
   <div class="acct-item"><div class="acct-label" id="acct-avg-label">Avg Daily</div><div class="acct-value" id="acct-avg">--</div></div>
   <div class="acct-item"><div class="acct-label" id="acct-annual-label">Annualized</div><div class="acct-value" id="acct-annual">--</div></div>
   <div class="acct-item"><div class="acct-label" id="acct-twr-label">TWR</div><div class="acct-value" id="acct-twr">--</div></div>
@@ -607,7 +607,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     var balance = d.balanceUsdc;
     var trading = d.tradingPnl || 0;
     var unrealized = d.unrealizedPnl;
-    var dailyRoi = d.dailyRoi;
+    var dailyRoi = d.yesterdayRoi;
     var avgDailyRoi = d.avgDailyRoi;
     var annualizedRoi = d.annualizedRoi;
     var cumulativeTwr = d.cumulativeTwr;
@@ -619,7 +619,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       balance = ps.balanceUsdc;
       trading = ps.tradingPnl || 0;
       unrealized = ps.unrealizedPnl;
-      dailyRoi = ps.dailyRoi;
+      dailyRoi = ps.yesterdayRoi;
       avgDailyRoi = ps.avgDailyRoi;
       annualizedRoi = ps.annualizedRoi;
       cumulativeTwr = ps.cumulativeTwr;
@@ -641,7 +641,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     var dailyEl = document.getElementById('acct-daily');
     dailyEl.textContent = fmtRoi(dailyRoi);
     dailyEl.className = 'acct-value ' + (dailyRoi != null ? cls(dailyRoi) : 'neutral');
-    document.getElementById('acct-daily-label').textContent = 'Today ROI' + stratLabel;
+    document.getElementById('acct-daily-label').textContent = 'Yesterday' + stratLabel;
 
     var avgEl = document.getElementById('acct-avg');
     avgEl.textContent = fmtRoi(avgDailyRoi);
