@@ -19,6 +19,7 @@ import {
   OrderTriggerCondition,
   BN,
   MarketType,
+  calculateReservePrice,
 } from '@drift-labs/sdk';
 import type { Direction } from './base-strategy.js';
 import type { LiveStateManager } from './live-state.js';
@@ -382,7 +383,7 @@ export class DriftExecutor {
    * Uses BN string parsing to avoid overflow on large values.
    */
   readMarketData(marketIndex = DEFAULT_MARKET_INDEX): {
-    fundingRate: number; fundingRate24h: number; spreadBps: number; markPrice: number;
+    fundingRate: number; fundingRate24h: number; spreadBps: number; markPrice: number; oraclePrice: number;
     longOI: number; shortOI: number; maxOI: number; sqrtK: number; userLpShares: number;
     usersWithPositions: number; totalUsers: number;
   } | null {
@@ -396,6 +397,10 @@ export class DriftExecutor {
       const amm = market.amm;
       const oracleData = this.client.getOracleDataForPerpMarket(marketIndex);
       const oraclePrice = oracleData.price.toNumber() / 1e6; // PRICE_PRECISION
+
+      // Mark price = AMM reserve price (mid-market from virtual reserves)
+      const reservePrice = calculateReservePrice(market, { ...oracleData, isMMOracleActive: false });
+      const markPrice = reservePrice.toNumber() / 1e6;
 
       // Safe BN → number for potentially large values (avoids toNumber() overflow)
       const bnToNum = (bn: BN, precision: number): number =>
@@ -421,7 +426,8 @@ export class DriftExecutor {
         fundingRate,
         fundingRate24h,
         spreadBps,
-        markPrice: oraclePrice,
+        markPrice,
+        oraclePrice,
         longOI,
         shortOI,
         maxOI,

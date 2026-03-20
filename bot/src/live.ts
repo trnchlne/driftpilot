@@ -39,7 +39,6 @@ import { BankrollManager } from './bankroll.js';
 import { DriftExecutor } from './executor.js';
 import { LiveStateManager } from './live-state.js';
 import { LiveTrader } from './live-trader.js';
-import { DriftPriceStream } from './drift-price.js';
 import { RoiTracker } from './roi-tracker.js';
 import type { RoiResult } from './roi-tracker.js';
 
@@ -296,19 +295,8 @@ async function main(): Promise<void> {
   const feed = new PriceFeed(uniqueFeedIds);
   dashboard.setFeed(feed);
 
-  // Start Drift mark price stream (DLOB websocket)
-  const driftMarketNames = warmupMarkets.map(m => {
-    const sym = Object.entries(MARKETS).find(([, v]) => v.feedId === m.feedId)?.[0] ?? 'SOL';
-    return `${sym}-PERP`;
-  });
-  const driftPriceStream = new DriftPriceStream(driftMarketNames);
+  // Drift mark/oracle prices from SDK (updated alongside market data emit)
   const driftPriceCache: Record<string, { mark: number; oracle: number }> = {};
-  driftPriceStream.onPrice((dp) => {
-    // Extract symbol from market name (e.g. "SOL-PERP" → "SOL")
-    const sym = dp.market.replace('-PERP', '');
-    driftPriceCache[sym] = { mark: dp.markPrice, oracle: dp.oraclePrice };
-  });
-  driftPriceStream.start();
 
   // Start ROI tracker (fetches from Drift data API, no local state)
   const subToStrategy: Record<number, string> = {};
@@ -417,12 +405,16 @@ async function main(): Promise<void> {
       }
     }
 
-    // Emit market data periodically (for SOL — primary market)
+    // Emit market data periodically + update Drift mark/oracle price cache
     if (now - lastMarketEmit >= MARKET_EMIT_INTERVAL_MS) {
       lastMarketEmit = now;
-      const marketData = executor.readMarketData(MARKETS.SOL.marketIndex);
-      if (marketData) {
-        dashboardBus.emitMarket(marketData);
+      for (const [sym, mkt] of Object.entries(MARKETS)) {
+        if (!feedIdSet.has(mkt.feedId)) continue;
+        const md = executor.readMarketData(mkt.marketIndex);
+        if (md) {
+          driftPriceCache[sym] = { mark: md.markPrice, oracle: md.oraclePrice };
+          if (sym === 'SOL') dashboardBus.emitMarket(md);
+        }
       }
     }
   });
@@ -452,7 +444,6 @@ async function main(): Promise<void> {
     console.log(`\n[live] ${signal} — shutting down...`);
     console.log('[live] SL triggers remain on-chain for protection');
     feed.stop();
-    driftPriceStream.stop();
     roiTracker.stop();
     arena.stop();
     dashboard.stop();
