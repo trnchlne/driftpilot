@@ -89,6 +89,7 @@ export type StrategyConfig =
       trailDelaySeconds: number;
       meanWindowSeconds: number; entryBandMultiple: number;
       reversionSlMultiple: number;
+      reversionTrailMultiple?: number;
       cooldownSeconds: number; betSizeSol: number;
       minAtrPct?: number;
       uncertainMultiple?: number;
@@ -141,7 +142,7 @@ export const STRATEGIES: StrategyConfig[] = [
   { type: 'regime', name: 'R-sharp-SOL',  market: 'SOL', atrPeriod: 60, regimeWindowSeconds: 4*3600, trendThreshold: 1.0, rangeThreshold: 0.2, signalWindowSeconds: 30*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 480, meanWindowSeconds: 2*3600, entryBandMultiple: 2.5, reversionSlMultiple: 4.0, cooldownSeconds: 300, betSizeSol: 1.0 },
   // Fast ATR variant: 20m/5.0 signal, tight entry band, low reversion SL — differentiated from R-base
   // Grid search #2 (1920 combos): +228.7% ROI, 66.2% WR, Sharpe 0.067, MaxDD 33.6%, 5/5 periods+
-  { type: 'regime', name: 'R-fast-SOL',   market: 'SOL', atrPeriod: 30, regimeWindowSeconds: 4*3600, trendThreshold: 1.5, rangeThreshold: 0.5, signalWindowSeconds: 20*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 300, meanWindowSeconds: 2*3600, entryBandMultiple: 1.5, reversionSlMultiple: 3.0, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, portfolioTpPct: 6, _useLockedMeanTP: true },
+  { type: 'regime', name: 'R-fast-SOL',   market: 'SOL', atrPeriod: 30, regimeWindowSeconds: 4*3600, trendThreshold: 1.5, rangeThreshold: 0.5, signalWindowSeconds: 20*60, signalMultiple: 5.0, trailingAtrMultiple: 1.5, slAtrMultiple: 2.5, trailDelaySeconds: 300, meanWindowSeconds: 2*3600, entryBandMultiple: 1.5, reversionSlMultiple: 3.0, reversionTrailMultiple: 0.6, cooldownSeconds: 120, betSizeSol: 1.0, minAtrPct: 0.035, portfolioTpPct: 6, _useLockedMeanTP: true },
 
   // ── HYPE-PERP strategies ──
   // Backtested on 468 days of HYPE data: R-fast +160.8% ROI, 2h mean optimal

@@ -61,6 +61,7 @@ export interface RegimeConfig {
 
   // Reversion exits
   reversionSlMultiple: number;   // hard SL = multiple × ATR%
+  reversionTrailMultiple?: number; // trail = multiple × ATR% (defaults to trailingAtrMultiple)
 
   // Uncertain regime SL override (default 1.0× — can be raised to reduce chop exits)
   uncertainSlMultiple?: number;
@@ -577,8 +578,9 @@ export class RegimeStrategy implements BaseStrategy {
       const favorable = this.entryDirection === 'long' ? movePct : -movePct;
 
       if (favorable > 0) {
+        const revTrailMult = this.config.reversionTrailMultiple ?? this.config.trailingAtrMultiple;
         const stopAtr = this.scaledAtr(this.config.regimeWindowSeconds / 60);
-        const trailPct = this.config.trailingAtrMultiple * stopAtr;
+        const trailPct = revTrailMult * stopAtr;
 
         if (this.entryDirection === 'long') {
           const drawdown = ((this.bestPriceSinceEntry - price) / this.bestPriceSinceEntry) * 100;
@@ -764,8 +766,9 @@ export class RegimeStrategy implements BaseStrategy {
         if (holdSec < this.config.trailDelaySeconds) {
           result['rev trail'] = `DELAYED — ${Math.round(this.config.trailDelaySeconds - holdSec)}s until active`;
         } else if (favorable > 0) {
+          const revTrailMult = this.config.reversionTrailMultiple ?? this.config.trailingAtrMultiple;
           const stopAtr = this.scaledAtr(this.config.regimeWindowSeconds / 60);
-          const trailPct = this.config.trailingAtrMultiple * stopAtr;
+          const trailPct = revTrailMult * stopAtr;
           const trailPrice = this.entryDirection === 'long'
             ? this.bestPriceSinceEntry * (1 - trailPct / 100)
             : this.bestPriceSinceEntry * (1 + trailPct / 100);
