@@ -48,7 +48,7 @@ function createLiveStrategy(
   executor: DriftExecutor,
   driftClient: DriftClient,
   subIdOverride?: number,
-): { strategy: BaseStrategy; bankroll: BankrollManager } {
+): { strategy: BaseStrategy; bankroll: BankrollManager; trader: LiveTrader } {
   const subId = subIdOverride ?? SUBACCOUNT_MAP[cfg.name];
   if (subId === undefined) {
     throw new Error(`No subaccount mapped for strategy ${cfg.name}`);
@@ -95,7 +95,7 @@ function createLiveStrategy(
 
   if (strategy.setBankroll) strategy.setBankroll(bankroll);
 
-  return { strategy, bankroll };
+  return { strategy, bankroll, trader };
 }
 
 async function main(): Promise<void> {
@@ -244,12 +244,14 @@ async function main(): Promise<void> {
   // 5. Create strategies with per-subaccount bankrolls
   const bankrolls: BankrollManager[] = [];
   const strategies: BaseStrategy[] = [];
+  const traders: LiveTrader[] = [];
 
   for (const cfg of activeStrategies) {
     const overriddenSub = subOverride ?? undefined;
-    const { strategy, bankroll } = createLiveStrategy(cfg, executor, driftClient, overriddenSub);
+    const { strategy, bankroll, trader } = createLiveStrategy(cfg, executor, driftClient, overriddenSub);
     strategies.push(strategy);
     bankrolls.push(bankroll);
+    traders.push(trader);
   }
 
   // Build metadata for Arena (market + subaccount per strategy)
@@ -313,8 +315,10 @@ async function main(): Promise<void> {
   const marketPrices: Record<string, number> = {}; // symbol → last price
   let lastAccountEmit = 0;
   let lastMarketEmit = 0;
-  const ACCOUNT_EMIT_INTERVAL_MS = 30_000; // 30s
-  const MARKET_EMIT_INTERVAL_MS = 60_000;  // 60s
+  let lastBankrollRefresh = 0;
+  const ACCOUNT_EMIT_INTERVAL_MS = 30_000;   // 30s
+  const MARKET_EMIT_INTERVAL_MS = 60_000;    // 60s
+  const BANKROLL_REFRESH_MS = 30_000;         // 30s — avoid flooding RPC on every tick
 
   // Build feedId → market symbol lookup
   const SOL_FEED_ID = MARKETS.SOL.feedId;
@@ -324,20 +328,38 @@ async function main(): Promise<void> {
   }
 
   feed.onTick((tick) => {
-    arena.onTick(tick);
+    const now = Date.now();
+
+    // Strategy tick processing — isolated so account/market emit still runs on error
+    try {
+      arena.onTick(tick);
+    } catch (err) {
+      console.error('[live] Strategy tick error:', err);
+      dashboardBus.emitActivity({
+        strategyName: 'SYSTEM',
+        level: 'error',
+        message: `Tick handler error — ${err instanceof Error ? err.message : String(err)}`,
+        timestamp: now / 1000,
+      });
+    }
 
     // Track per-market prices
     const sym = feedIdToSymbol[tick.feedId];
     if (sym) marketPrices[sym] = tick.price;
 
-    // Use SOL price for bankroll SOL conversion
+    // Use SOL price for bankroll SOL conversion (throttle RPC refresh)
     if (tick.feedId === SOL_FEED_ID) {
       lastSol = tick.price;
       for (const bm of bankrolls) {
         bm.updateSolPrice(tick.price);
-        bm.refreshFromDrift().catch((err) => {
-          console.error('[live] Bankroll refresh failed:', err);
-        });
+      }
+      if (now - lastBankrollRefresh >= BANKROLL_REFRESH_MS) {
+        lastBankrollRefresh = now;
+        for (const bm of bankrolls) {
+          bm.refreshFromDrift().catch((err) => {
+            console.error('[live] Bankroll refresh failed:', err);
+          });
+        }
       }
     }
 
@@ -352,7 +374,6 @@ async function main(): Promise<void> {
     }
 
     // Emit account balance periodically (aggregate all active subaccounts)
-    const now = Date.now();
     if (now - lastAccountEmit >= ACCOUNT_EMIT_INTERVAL_MS) {
       lastAccountEmit = now;
       let totalCollateral = 0;
@@ -422,6 +443,43 @@ async function main(): Promise<void> {
   feed.start();
   arena.start();
 
+  // 9. Position sync — detect external closes (SL trigger, manual, liquidation)
+  const SYNC_INTERVAL_MS = 10_000; // check every 10s
+  const syncTimer = setInterval(() => {
+    for (const trader of traders) {
+      trader.syncWithDrift().catch((err) => {
+        console.error('[live] Position sync error:', err);
+      });
+    }
+  }, SYNC_INTERVAL_MS);
+
+  // 10. Feed stale detection — alert when Pyth feed goes silent
+  let feedStaleNotified = false;
+  const feedWatchTimer = setInterval(() => {
+    const lastTick = feed.lastTickMs;
+    if (lastTick > 0 && Date.now() - lastTick > 60_000) {
+      if (!feedStaleNotified) {
+        feedStaleNotified = true;
+        const silentSec = Math.round((Date.now() - lastTick) / 1000);
+        console.error(`[live] Price feed stale — no ticks for ${silentSec}s`);
+        dashboardBus.emitActivity({
+          strategyName: 'SYSTEM',
+          level: 'error',
+          message: `Price feed stale — no ticks for ${silentSec}s. On-chain SL protects open positions.`,
+          timestamp: Date.now() / 1000,
+        });
+      }
+    } else if (feedStaleNotified) {
+      feedStaleNotified = false;
+      dashboardBus.emitActivity({
+        strategyName: 'SYSTEM',
+        level: 'info',
+        message: 'Price feed recovered',
+        timestamp: Date.now() / 1000,
+      });
+    }
+  }, 30_000);
+
   // Startup summary
   console.log('');
   console.log('[live] ═══ LIVE TRADING ACTIVE ═══');
@@ -443,6 +501,8 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`\n[live] ${signal} — shutting down...`);
     console.log('[live] SL triggers remain on-chain for protection');
+    clearInterval(syncTimer);
+    clearInterval(feedWatchTimer);
     feed.stop();
     roiTracker.stop();
     arena.stop();

@@ -462,6 +462,48 @@ export class DriftExecutor {
     }
   }
 
+  /**
+   * Non-blocking position read (uses cached websocket data, no RPC call).
+   * Returns DriftPosition if open, null if flat, 'error' if read failed.
+   */
+  readPositionSync(subAccountId: number, marketIndex = DEFAULT_MARKET_INDEX): DriftPosition | null | 'error' {
+    try {
+      const user = this.client.getUser(subAccountId);
+      const position = user.getPerpPosition(marketIndex);
+      if (!position || position.baseAssetAmount.isZero()) return null;
+      const isLong = position.baseAssetAmount.gt(new BN(0));
+      const size = position.baseAssetAmount.abs().toNumber() / 1e9;
+      const quoteEntry = Math.abs(position.quoteEntryAmount.toNumber()) / 1e6;
+      const baseEntry = position.baseAssetAmount.abs().toNumber() / 1e9;
+      const entryPrice = baseEntry > 0 ? quoteEntry / baseEntry : 0;
+      return { direction: isLong ? 'long' : 'short', size, entryPrice };
+    } catch {
+      return 'error';
+    }
+  }
+
+  /** Get current oracle price for a market (cached, no RPC call). */
+  getOraclePrice(marketIndex = DEFAULT_MARKET_INDEX): number | null {
+    try {
+      const oracleData = this.client.getOracleDataForPerpMarket(marketIndex);
+      return oracleData.price.toNumber() / 1e6;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Cancel all orders and clear state for a subaccount (used after external close). */
+  async cleanupOrders(stratName: string, subAccountId: number, marketIndex = DEFAULT_MARKET_INDEX): Promise<void> {
+    await this.withMutex(async () => {
+      await this.client.switchActiveUser(subAccountId);
+      try {
+        await this.client.cancelOrders(MarketType.PERP, marketIndex, undefined, undefined, subAccountId);
+        console.log(`[executor] Cleanup: cancelled orders sub=${subAccountId} (${stratName})`);
+      } catch { /* no orders to cancel */ }
+      this.stateManager.clear(stratName);
+    });
+  }
+
   /** Serialize all Drift operations */
   private async withMutex(fn: () => Promise<void>): Promise<void> {
     const prev = this.mutexPromise;

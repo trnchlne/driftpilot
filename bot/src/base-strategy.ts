@@ -45,6 +45,7 @@ export interface PaperTrade {
 
 export type OnTradeCallback = (trade: PaperTrade) => void;
 export type OnOpenCancelledCallback = (info: { sizeSol: number; direction: Direction; time: number }) => void;
+export type OnExternalCloseCallback = (trade: PaperTrade, reason: string) => void;
 
 export class PaperTrader {
   private trades: PaperTrade[] = [];
@@ -59,6 +60,7 @@ export class PaperTrader {
   private readonly startTime: number;
   private _onTrade: OnTradeCallback | null = null;
   private _onOpenCancelled: OnOpenCancelledCallback | null = null;
+  private _onExternalClose: OnExternalCloseCallback | null = null;
 
   constructor(startTime?: number) {
     this.startTime = startTime ?? Date.now();
@@ -70,6 +72,15 @@ export class PaperTrader {
 
   onOpenCancelled(cb: OnOpenCancelledCallback): void {
     this._onOpenCancelled = cb;
+  }
+
+  onExternalClose(cb: OnExternalCloseCallback): void {
+    this._onExternalClose = cb;
+  }
+
+  /** Called by LiveTrader when Drift position is closed externally (SL trigger / manual / liquidation) */
+  protected notifyExternalClose(trade: PaperTrade, reason: string): void {
+    if (this._onExternalClose) this._onExternalClose(trade, reason);
   }
 
   get inPosition(): boolean {

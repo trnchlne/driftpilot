@@ -170,6 +170,25 @@ export class RegimeStrategy implements BaseStrategy {
         `Open cancelled — Drift fill failed, ${this.config.cooldownSeconds}s cooldown applied`,
         { reason: 'fill-cancelled', direction: info.direction, sizeSol: info.sizeSol });
     });
+
+    this.paper.onExternalClose((trade, reason) => {
+      // Position was closed outside the bot (SL trigger, manual close, liquidation)
+      this.lastExitTickTime = trade.exitTime;
+      this.lastExitReason = reason;
+      this.bankroll?.releaseCapital(trade.sizeSol / LEVERAGE);
+      this.bankroll?.recordPnl(trade.netPnlSol);
+      const sign = trade.netPnlSol >= 0 ? '+' : '';
+      console.log(
+        `[${this.name}] External close — ${reason}, ${sign}${trade.netPnlSol.toFixed(6)} SOL (estimated), cooldown applied`,
+      );
+      decisionLog.log('exit', this.name, trade.exitPrice,
+        `External close (${reason}) — position closed outside bot. ${sign}${trade.netPnlSol.toFixed(6)} SOL (estimated)`,
+        {
+          reason, direction: trade.direction, netPnlSol: trade.netPnlSol,
+          sizeSol: trade.sizeSol, entryPrice: trade.entryPrice, exitPrice: trade.exitPrice,
+          note: 'exit price is oracle estimate, actual fill may differ',
+        });
+    });
   }
 
   onTick(tick: Tick): void {
