@@ -192,15 +192,16 @@ export class LiveTrader extends PaperTrader {
     // Only check when paper thinks we're in position and no operations in flight
     if (!this.inPosition || this._pendingClose || this._pendingOpen) return;
 
-    const driftPos = this.executor.readPositionSync(this.subAccountId, this.marketIndex);
+    const cachedPos = this.executor.readPositionSync(this.subAccountId, this.marketIndex);
 
-    // Read error → assume position still exists (safe default)
-    if (driftPos === 'error') return;
+    // Read error or position still exists in cache → all good
+    if (cachedPos === 'error' || cachedPos !== null) return;
 
-    // Position still exists on Drift → all good
-    if (driftPos !== null) return;
+    // Cache says position is gone — verify with RPC before acting (cache can be stale)
+    const rpcPos = await this.executor.readPositionRpc(this.subAccountId, this.marketIndex);
+    if (rpcPos === 'error' || rpcPos !== null) return; // RPC says it's still there, false alarm
 
-    // ── Position gone on Drift but paper still open ──
+    // ── Position confirmed gone on Drift (both cache + RPC agree) ──
     // Could be: SL trigger fired, manual close on Drift UI, or liquidation
     const oraclePrice = this.executor.getOraclePrice(this.marketIndex);
     const exitPrice = oraclePrice ?? this.lastEntryPrice;

@@ -70,10 +70,11 @@ export class DriftExecutor {
       // 1. Switch to subaccount
       await this.client.switchActiveUser(subAccountId);
 
-      // 1b. Guard: check for stale position from a failed close
+      // 1b. Guard: check for stale position from a failed close (RPC refresh — don't trust cache)
       let priorBaseAmount = new BN(0);
       try {
         const user = this.client.getUser(subAccountId);
+        await user.fetchAccounts();
         const position = user.getPerpPosition(marketIndex);
         if (position) {
           priorBaseAmount = position.baseAssetAmount;
@@ -104,11 +105,23 @@ export class DriftExecutor {
 
         const entryTx = await this.client.placePerpOrder(entryParams);
         console.log(`[executor] MARKET ${direction.toUpperCase()} ${sizeSol} sub=${subAccountId} mkt=${marketIndex} (${stratName}) tx=${entryTx}`);
+        dashboardBus.emitActivity({
+          strategyName: stratName,
+          level: 'info',
+          message: `Market ${direction.toUpperCase()} ${sizeSol} SOL placed — tx=${entryTx}`,
+          timestamp: Date.now() / 1000,
+        });
 
-        // Market orders fill immediately — brief poll to confirm
-        filled = await this.waitForFill(subAccountId, priorBaseAmount, marketIndex);
+        // Market orders fill immediately — poll with RPC refresh to confirm
+        filled = await this.waitForFill(subAccountId, priorBaseAmount, marketIndex, stratName);
         if (!filled) {
           console.log(`[executor] MARKET ORDER NOT FILLED — unexpected (${stratName})`);
+          dashboardBus.emitActivity({
+            strategyName: stratName,
+            level: 'error',
+            message: `Market order not filled after ${FILL_POLL_MAX_WAIT_MS / 1000}s — tx=${entryTx}`,
+            timestamp: Date.now() / 1000,
+          });
           try {
             await this.client.cancelOrders(MarketType.PERP, marketIndex, undefined, undefined, subAccountId);
           } catch { /* nothing to cancel */ }
@@ -116,6 +129,12 @@ export class DriftExecutor {
         }
 
         console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} sub=${subAccountId} mkt=${marketIndex} (${stratName})`);
+        dashboardBus.emitActivity({
+          strategyName: stratName,
+          level: 'info',
+          message: `Filled ${direction.toUpperCase()} ${sizeSol} SOL — tx=${entryTx}`,
+          timestamp: Date.now() / 1000,
+        });
       } else {
         // ── Post-only limit order (maker) — for ranging/reversion entries ──
         const oracleData = this.client.getOracleDataForPerpMarket(marketIndex);
@@ -135,12 +154,24 @@ export class DriftExecutor {
 
         const entryTx = await this.client.placePerpOrder(entryParams);
         console.log(`[executor] LIMIT ${direction.toUpperCase()} ${sizeSol} @ oracle sub=${subAccountId} mkt=${marketIndex} (${stratName}) tx=${entryTx}`);
+        dashboardBus.emitActivity({
+          strategyName: stratName,
+          level: 'info',
+          message: `Limit ${direction.toUpperCase()} ${sizeSol} SOL placed — tx=${entryTx}`,
+          timestamp: Date.now() / 1000,
+        });
 
-        // Poll for fill
-        filled = await this.waitForFill(subAccountId, priorBaseAmount, marketIndex);
+        // Poll for fill with RPC refresh
+        filled = await this.waitForFill(subAccountId, priorBaseAmount, marketIndex, stratName);
 
         if (!filled) {
           console.log(`[executor] LIMIT EXPIRED — entry skipped (${stratName})`);
+          dashboardBus.emitActivity({
+            strategyName: stratName,
+            level: 'warn',
+            message: `Limit order expired unfilled — tx=${entryTx}`,
+            timestamp: Date.now() / 1000,
+          });
           try {
             await this.client.cancelOrders(MarketType.PERP, marketIndex, undefined, undefined, subAccountId);
           } catch { /* order already expired */ }
@@ -148,6 +179,12 @@ export class DriftExecutor {
         }
 
         console.log(`[executor] FILLED ${direction.toUpperCase()} ${sizeSol} sub=${subAccountId} mkt=${marketIndex} (${stratName})`);
+        dashboardBus.emitActivity({
+          strategyName: stratName,
+          level: 'info',
+          message: `Filled ${direction.toUpperCase()} ${sizeSol} SOL — tx=${entryTx}`,
+          timestamp: Date.now() / 1000,
+        });
       }
 
       // 4. Place trigger-market SL order (reduceOnly, on-chain protection)
@@ -169,6 +206,12 @@ export class DriftExecutor {
 
       const slTx = await this.client.placePerpOrder(slParams);
       console.log(`[executor] SL trigger @ $${slPrice.toFixed(2)} sub=${subAccountId} tx=${slTx}`);
+      dashboardBus.emitActivity({
+        strategyName: stratName,
+        level: 'info',
+        message: `SL trigger placed @ $${slPrice.toFixed(2)} — tx=${slTx}`,
+        timestamp: Date.now() / 1000,
+      });
 
       // 5. Save supplementary state
       this.stateManager.set(stratName, {
@@ -182,21 +225,36 @@ export class DriftExecutor {
   /**
    * Poll until position size changes from pre-order snapshot (order filled)
    * or until timeout (order expired unfilled).
+   * Uses fetchAccounts() to force RPC refresh — websocket cache can go stale.
    */
-  private async waitForFill(subAccountId: number, priorBaseAmount: BN, marketIndex = DEFAULT_MARKET_INDEX): Promise<boolean> {
+  private async waitForFill(subAccountId: number, priorBaseAmount: BN, marketIndex: number, stratName: string): Promise<boolean> {
     const start = Date.now();
+    let lastSeenBase = priorBaseAmount;
+
     while (Date.now() - start < FILL_POLL_MAX_WAIT_MS) {
       try {
         const user = this.client.getUser(subAccountId);
+        await user.fetchAccounts(); // Force RPC refresh — don't trust websocket cache
         const position = user.getPerpPosition(marketIndex);
         const currentBase = position ? position.baseAssetAmount : new BN(0);
+        lastSeenBase = currentBase;
         // Position size changed from pre-order snapshot → order filled
         if (!currentBase.eq(priorBaseAmount)) {
           return true;
         }
-      } catch { /* ignore read errors during polling */ }
+      } catch (err) {
+        console.warn(`[executor] Fill poll read error sub=${subAccountId} (${stratName}):`, err);
+      }
       await new Promise((r) => setTimeout(r, FILL_POLL_INTERVAL_MS));
     }
+
+    // Timeout — log what we saw for debugging
+    const seenSize = lastSeenBase.toNumber() / 1e9;
+    const priorSize = priorBaseAmount.toNumber() / 1e9;
+    console.warn(
+      `[executor] Fill poll timed out sub=${subAccountId} (${stratName}) — ` +
+      `prior=${priorSize.toFixed(4)} last_seen=${seenSize.toFixed(4)} (${Math.round((Date.now() - start) / 1000)}s)`,
+    );
     return false;
   }
 
@@ -209,8 +267,9 @@ export class DriftExecutor {
       // 1. Switch to subaccount
       await this.client.switchActiveUser(subAccountId);
 
-      // 2. Read position from Drift (SL trigger stays active until close is confirmed)
+      // 2. Read position from Drift via RPC (SL trigger stays active until close is confirmed)
       const user = this.client.getUser(subAccountId);
+      await user.fetchAccounts();
       const position = user.getPerpPosition(marketIndex);
 
       if (!position || position.baseAssetAmount.isZero()) {
@@ -227,8 +286,9 @@ export class DriftExecutor {
       let isClosed = false;
 
       for (let attempt = 0; attempt < retryDelays.length; attempt++) {
-        // Read current position (may have shrunk from prior attempt or SL trigger)
+        // Read current position via RPC (may have shrunk from prior attempt or SL trigger)
         const curUser = this.client.getUser(subAccountId);
+        await curUser.fetchAccounts();
         const curPos = curUser.getPerpPosition(marketIndex);
         if (!curPos || curPos.baseAssetAmount.isZero()) {
           isClosed = true;
@@ -270,9 +330,10 @@ export class DriftExecutor {
         await new Promise(r => setTimeout(r, retryDelays[attempt]));
       }
 
-      // Final check after all retries
+      // Final check after all retries (RPC refresh)
       if (!isClosed) {
         const finalUser = this.client.getUser(subAccountId);
+        await finalUser.fetchAccounts();
         const finalPos = finalUser.getPerpPosition(marketIndex);
         isClosed = !finalPos || finalPos.baseAssetAmount.isZero();
       }
@@ -287,6 +348,7 @@ export class DriftExecutor {
       } else {
         // FAILURE — position still open, SL trigger stays active for protection
         const ghostUser = this.client.getUser(subAccountId);
+        await ghostUser.fetchAccounts();
         const ghostPos = ghostUser.getPerpPosition(marketIndex);
         const ghostSize = ghostPos ? ghostPos.baseAssetAmount.abs().toNumber() / 1e9 : 0;
         console.error(
@@ -319,6 +381,7 @@ export class DriftExecutor {
         try {
           const mktIdx = strategyMarketIndices?.[stratName] ?? DEFAULT_MARKET_INDEX;
           const user = this.client.getUser(subId);
+          await user.fetchAccounts();
           const position = user.getPerpPosition(mktIdx);
 
           if (!position || position.baseAssetAmount.isZero()) continue;
@@ -463,12 +526,35 @@ export class DriftExecutor {
   }
 
   /**
-   * Non-blocking position read (uses cached websocket data, no RPC call).
+   * Position read using websocket cache (fast, no RPC call).
    * Returns DriftPosition if open, null if flat, 'error' if read failed.
+   * Used by the 10s sync check — only triggers RPC via syncWithDrift when
+   * a mismatch (paper=in position, cache=flat) is suspected.
    */
   readPositionSync(subAccountId: number, marketIndex = DEFAULT_MARKET_INDEX): DriftPosition | null | 'error' {
     try {
       const user = this.client.getUser(subAccountId);
+      const position = user.getPerpPosition(marketIndex);
+      if (!position || position.baseAssetAmount.isZero()) return null;
+      const isLong = position.baseAssetAmount.gt(new BN(0));
+      const size = position.baseAssetAmount.abs().toNumber() / 1e9;
+      const quoteEntry = Math.abs(position.quoteEntryAmount.toNumber()) / 1e6;
+      const baseEntry = position.baseAssetAmount.abs().toNumber() / 1e9;
+      const entryPrice = baseEntry > 0 ? quoteEntry / baseEntry : 0;
+      return { direction: isLong ? 'long' : 'short', size, entryPrice };
+    } catch {
+      return 'error';
+    }
+  }
+
+  /**
+   * Position read with forced RPC refresh. Used when cache says "no position"
+   * but we suspect the cache might be stale. More expensive but authoritative.
+   */
+  async readPositionRpc(subAccountId: number, marketIndex = DEFAULT_MARKET_INDEX): Promise<DriftPosition | null | 'error'> {
+    try {
+      const user = this.client.getUser(subAccountId);
+      await user.fetchAccounts();
       const position = user.getPerpPosition(marketIndex);
       if (!position || position.baseAssetAmount.isZero()) return null;
       const isLong = position.baseAssetAmount.gt(new BN(0));
