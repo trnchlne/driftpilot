@@ -23,6 +23,7 @@ import {
 } from '@drift-labs/sdk';
 import type { Direction } from './base-strategy.js';
 import type { LiveStateManager } from './live-state.js';
+import { dashboardBus } from './dashboard-bus.js';
 
 const DEFAULT_MARKET_INDEX = 0; // SOL-PERP
 const LIMIT_ORDER_EXPIRY_SECONDS = 30;
@@ -77,10 +78,17 @@ export class DriftExecutor {
         if (position) {
           priorBaseAmount = position.baseAssetAmount;
           if (!position.baseAssetAmount.isZero()) {
+            const staleSize = position.baseAssetAmount.toNumber() / 1e9;
             console.error(
               `[executor] STALE POSITION DETECTED sub=${subAccountId} (${stratName}) ` +
-              `size=${position.baseAssetAmount.toNumber() / 1e9} — aborting open to prevent double exposure`,
+              `size=${staleSize} — aborting open to prevent double exposure`,
             );
+            dashboardBus.emitActivity({
+              strategyName: stratName,
+              level: 'error',
+              message: `Stale position detected (${staleSize.toFixed(4)}) — open aborted to prevent double exposure`,
+              timestamp: Date.now() / 1000,
+            });
             return; // filled stays false → LiveTrader will unwind paper
           }
         }
@@ -201,86 +209,98 @@ export class DriftExecutor {
       // 1. Switch to subaccount
       await this.client.switchActiveUser(subAccountId);
 
-      // 2. Cancel all open orders (SL trigger)
-      try {
-        await this.client.cancelOrders(
-          MarketType.PERP,
-          marketIndex,
-          undefined, // direction
-          undefined, // txParams
-          subAccountId,
-        );
-        console.log(`[executor] Cancelled orders sub=${subAccountId} (${stratName})`);
-      } catch (err) {
-        console.warn(`[executor] Cancel orders failed sub=${subAccountId}:`, err);
-      }
-
-      // 3. Read position from Drift
+      // 2. Read position from Drift (SL trigger stays active until close is confirmed)
       const user = this.client.getUser(subAccountId);
       const position = user.getPerpPosition(marketIndex);
 
       if (!position || position.baseAssetAmount.isZero()) {
         console.log(`[executor] No position to close sub=${subAccountId} (${stratName})`);
+        try {
+          await this.client.cancelOrders(MarketType.PERP, marketIndex, undefined, undefined, subAccountId);
+        } catch { /* no orders to cancel */ }
         this.stateManager.clear(stratName);
         return;
       }
 
-      // 4. Close position with market order (reduceOnly)
-      const isLong = position.baseAssetAmount.gt(new BN(0));
-      const closeDir = isLong ? PositionDirection.SHORT : PositionDirection.LONG;
-      const size = position.baseAssetAmount.abs();
+      // 3. Retry loop: place market close, wait, check — escalating delays
+      const retryDelays = [2_000, 10_000, 20_000, 30_000];
+      let isClosed = false;
 
-      const closeParams = getMarketOrderParams({
-        marketIndex,
-        direction: closeDir,
-        baseAssetAmount: size,
-        reduceOnly: true,
-      });
+      for (let attempt = 0; attempt < retryDelays.length; attempt++) {
+        // Read current position (may have shrunk from prior attempt or SL trigger)
+        const curUser = this.client.getUser(subAccountId);
+        const curPos = curUser.getPerpPosition(marketIndex);
+        if (!curPos || curPos.baseAssetAmount.isZero()) {
+          isClosed = true;
+          break;
+        }
 
-      const tx = await this.client.placePerpOrder(closeParams);
-      console.log(`[executor] CLOSE sub=${subAccountId} (${stratName}) tx=${tx}`);
+        const curDir = curPos.baseAssetAmount.gt(new BN(0))
+          ? PositionDirection.SHORT
+          : PositionDirection.LONG;
 
-      // 5. Verify close — retry once if position still exists
-      await new Promise(r => setTimeout(r, 2000));
-      try {
-        const userAfter = this.client.getUser(subAccountId);
-        const posAfter = userAfter.getPerpPosition(marketIndex);
-        if (posAfter && !posAfter.baseAssetAmount.isZero()) {
-          const remainingSize = posAfter.baseAssetAmount.abs().toNumber() / 1e9;
-          console.error(
-            `[executor] CLOSE INCOMPLETE sub=${subAccountId} (${stratName}) — ` +
-            `${remainingSize.toFixed(4)} remaining, retrying...`,
-          );
-          const retryDir = posAfter.baseAssetAmount.gt(new BN(0))
-            ? PositionDirection.SHORT
-            : PositionDirection.LONG;
-          const retryParams = getMarketOrderParams({
+        try {
+          const closeParams = getMarketOrderParams({
             marketIndex,
-            direction: retryDir,
-            baseAssetAmount: posAfter.baseAssetAmount.abs(),
+            direction: curDir,
+            baseAssetAmount: curPos.baseAssetAmount.abs(),
             reduceOnly: true,
           });
-          const retryTx = await this.client.placePerpOrder(retryParams);
-          console.log(`[executor] RETRY CLOSE sub=${subAccountId} (${stratName}) tx=${retryTx}`);
-
-          // Final check after retry
-          await new Promise(r => setTimeout(r, 2000));
-          const userFinal = this.client.getUser(subAccountId);
-          const posFinal = userFinal.getPerpPosition(marketIndex);
-          if (posFinal && !posFinal.baseAssetAmount.isZero()) {
-            const ghostSize = posFinal.baseAssetAmount.abs().toNumber() / 1e9;
-            console.error(
-              `[executor] *** GHOST POSITION *** sub=${subAccountId} (${stratName}) — ` +
-              `${ghostSize.toFixed(4)} still open after 2 close attempts! Manual intervention needed.`,
-            );
+          const tx = await this.client.placePerpOrder(closeParams);
+          const label = attempt === 0 ? 'CLOSE' : `RETRY CLOSE #${attempt}`;
+          console.log(`[executor] ${label} sub=${subAccountId} (${stratName}) tx=${tx}`);
+          if (attempt > 0) {
+            dashboardBus.emitActivity({
+              strategyName: stratName,
+              level: 'warn',
+              message: `Close retry #${attempt} — waiting ${retryDelays[attempt] / 1000}s`,
+              timestamp: Date.now() / 1000,
+            });
           }
+        } catch (err) {
+          console.error(`[executor] Close attempt ${attempt + 1} failed sub=${subAccountId} (${stratName}):`, err);
+          dashboardBus.emitActivity({
+            strategyName: stratName,
+            level: 'error',
+            message: `Close attempt ${attempt + 1} failed — ${err instanceof Error ? err.message : String(err)}`,
+            timestamp: Date.now() / 1000,
+          });
         }
-      } catch (err) {
-        console.error(`[executor] Close verification failed sub=${subAccountId} (${stratName}):`, err);
+
+        await new Promise(r => setTimeout(r, retryDelays[attempt]));
       }
 
-      // 6. Clear state
-      this.stateManager.clear(stratName);
+      // Final check after all retries
+      if (!isClosed) {
+        const finalUser = this.client.getUser(subAccountId);
+        const finalPos = finalUser.getPerpPosition(marketIndex);
+        isClosed = !finalPos || finalPos.baseAssetAmount.isZero();
+      }
+
+      if (isClosed) {
+        // Success — cancel remaining orders (SL trigger) and clear state
+        try {
+          await this.client.cancelOrders(MarketType.PERP, marketIndex, undefined, undefined, subAccountId);
+          console.log(`[executor] Cancelled orders sub=${subAccountId} (${stratName})`);
+        } catch { /* no orders to cancel */ }
+        this.stateManager.clear(stratName);
+      } else {
+        // FAILURE — position still open, SL trigger stays active for protection
+        const ghostUser = this.client.getUser(subAccountId);
+        const ghostPos = ghostUser.getPerpPosition(marketIndex);
+        const ghostSize = ghostPos ? ghostPos.baseAssetAmount.abs().toNumber() / 1e9 : 0;
+        console.error(
+          `[executor] *** GHOST POSITION *** sub=${subAccountId} (${stratName}) — ` +
+          `${ghostSize.toFixed(4)} still open after ${retryDelays.length} close attempts. SL trigger preserved.`,
+        );
+        dashboardBus.emitActivity({
+          strategyName: stratName,
+          level: 'error',
+          message: `GHOST POSITION — ${ghostSize.toFixed(4)} still open after ${retryDelays.length} close attempts. SL preserved.`,
+          timestamp: Date.now() / 1000,
+        });
+        throw new Error(`CLOSE_FAILED: ${ghostSize.toFixed(4)} still open on sub=${subAccountId} (${stratName})`);
+      }
     });
   }
 

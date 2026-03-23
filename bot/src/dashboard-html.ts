@@ -203,6 +203,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .trade-action.open { color: #38bdf8; }
   .trade-action.close { color: #a78bfa; }
   .trade-size { color: #5a5f73; }
+  .trade-action.activity-info { color: #38bdf8; }
+  .trade-action.activity-warn { color: #fbbf24; }
+  .trade-action.activity-error { color: #ef4444; }
+  .trade-msg { color: #7a8099; }
   .empty-msg { color: #3a3f53; font-style: italic; padding: 10px 0; }
 
   /* Market insight panel */
@@ -802,7 +806,16 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       var d = new Date(t.timestamp);
       var time = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 
-      if (t.action === 'OPEN') {
+      if (t.action === 'ACTIVITY') {
+        var lvlClass = 'activity-' + (t.level || 'info');
+        var label = (t.level || 'info').toUpperCase();
+        html += '<div class="trade-line">'
+          + '<span class="trade-time">' + time + '</span>'
+          + '<span class="trade-name">' + t.strategyName + '</span>'
+          + '<span class="trade-action ' + lvlClass + '">' + label + '</span>'
+          + '<span class="trade-msg">' + t.message + '</span>'
+          + '</div>';
+      } else if (t.action === 'OPEN') {
         html += '<div class="trade-line">'
           + '<span class="trade-time">' + time + '</span>'
           + '<span class="trade-name">' + t.strategyName + '</span>'
@@ -966,6 +979,12 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     es.addEventListener('trade', function(e) {
       var d = JSON.parse(e.data);
       d.action = 'EXIT';
+      addActivity(d);
+    });
+
+    es.addEventListener('activity', function(e) {
+      var d = JSON.parse(e.data);
+      d.action = 'ACTIVITY';
       addActivity(d);
     });
 

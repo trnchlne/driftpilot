@@ -44,6 +44,7 @@ export interface PaperTrade {
 }
 
 export type OnTradeCallback = (trade: PaperTrade) => void;
+export type OnOpenCancelledCallback = (info: { sizeSol: number; direction: Direction; time: number }) => void;
 
 export class PaperTrader {
   private trades: PaperTrade[] = [];
@@ -57,6 +58,7 @@ export class PaperTrader {
   private _tradeCounter = 0;
   private readonly startTime: number;
   private _onTrade: OnTradeCallback | null = null;
+  private _onOpenCancelled: OnOpenCancelledCallback | null = null;
 
   constructor(startTime?: number) {
     this.startTime = startTime ?? Date.now();
@@ -64,6 +66,10 @@ export class PaperTrader {
 
   onTrade(cb: OnTradeCallback): void {
     this._onTrade = cb;
+  }
+
+  onOpenCancelled(cb: OnOpenCancelledCallback): void {
+    this._onOpenCancelled = cb;
   }
 
   get inPosition(): boolean {
@@ -129,6 +135,14 @@ export class PaperTrader {
     this.trades.push(trade);
     if (this._onTrade) this._onTrade(trade);
     return trade;
+  }
+
+  /** Cancel an open that was never filled on-chain. Resets paper state without recording a trade. */
+  cancelOpen(time?: number): void {
+    if (!this._inPosition) return;
+    const info = { sizeSol: this._sizeSol, direction: this._direction, time: time ?? Date.now() / 1000 };
+    this._inPosition = false;
+    if (this._onOpenCancelled) this._onOpenCancelled(info);
   }
 
   getMetrics(now?: number): PerformanceMetrics {

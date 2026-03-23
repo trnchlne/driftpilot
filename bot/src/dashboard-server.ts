@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { DASHBOARD_HTML } from './dashboard-html.js';
 import { dashboardBus } from './dashboard-bus.js';
-import type { PriceEvent, EntryEvent, TradeEvent, LeaderboardEvent, AccountEvent, MarketEvent } from './dashboard-bus.js';
+import type { PriceEvent, EntryEvent, TradeEvent, LeaderboardEvent, AccountEvent, MarketEvent, ActivityEvent } from './dashboard-bus.js';
 import type { PriceFeed } from './feed.js';
 import { decisionLog } from './decision-log.js';
 import type { DecisionType } from './decision-log.js';
@@ -20,6 +20,7 @@ export class DashboardServer {
   private lastAccount: AccountEvent | null = null;
   private recentTrades: TradeEvent[] = [];
   private recentEntries: EntryEvent[] = [];
+  private recentActivities: ActivityEvent[] = [];
   private startTime = Date.now();
   private priceFeed: PriceFeed | null = null;
 
@@ -56,6 +57,11 @@ export class DashboardServer {
     });
     dashboardBus.on('market', (event: MarketEvent) => {
       this.broadcast('market', event);
+    });
+    dashboardBus.on('activity', (event: ActivityEvent) => {
+      this.recentActivities.push(event);
+      if (this.recentActivities.length > MAX_RECENT_TRADES) this.recentActivities.shift();
+      this.broadcast('activity', event);
     });
 
     this.server.listen(PORT, () => {
@@ -250,6 +256,9 @@ export class DashboardServer {
     }
     for (const trade of this.recentTrades) {
       res.write(`event: trade\ndata: ${JSON.stringify(trade)}\n\n`);
+    }
+    for (const activity of this.recentActivities) {
+      res.write(`event: activity\ndata: ${JSON.stringify(activity)}\n\n`);
     }
 
     this.clients.add(res);

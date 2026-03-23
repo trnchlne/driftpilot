@@ -12,6 +12,7 @@
 import { PaperTrader } from './base-strategy.js';
 import type { Direction, PaperTrade } from './base-strategy.js';
 import type { DriftExecutor } from './executor.js';
+import { dashboardBus } from './dashboard-bus.js';
 
 export class LiveTrader extends PaperTrader {
   private readonly strategyName: string;
@@ -55,6 +56,12 @@ export class LiveTrader extends PaperTrader {
     // Block opens while a previous close is still settling on Drift
     if (this._pendingClose) {
       console.warn(`[live-trader] BLOCKED OPEN — close still pending on Drift (${this.strategyName})`);
+      dashboardBus.emitActivity({
+        strategyName: this.strategyName,
+        level: 'warn',
+        message: 'Open blocked — close still pending on Drift',
+        timestamp: Date.now() / 1000,
+      });
       return;
     }
 
@@ -88,16 +95,26 @@ export class LiveTrader extends PaperTrader {
       )
       .then((filled) => {
         if (!filled) {
-          // Limit order expired unfilled — unwind the paper position so
-          // strategy doesn't think it's in a trade with no Drift backing
-          console.log(`[live-trader] Unwinding paper position — limit unfilled (${this.strategyName})`);
-          super.closePaper(price, 0, time); // 0 fee since no trade happened
+          // Order not filled — cancel paper position without recording a trade
+          console.log(`[live-trader] Open not filled — cancelling paper position (${this.strategyName})`);
+          dashboardBus.emitActivity({
+            strategyName: this.strategyName,
+            level: 'warn',
+            message: 'Open not filled — order expired, position cancelled',
+            timestamp: Date.now() / 1000,
+          });
+          super.cancelOpen(time);
         }
       })
       .catch((err) => {
         console.error(`[live-trader] DRIFT OPEN FAILED ${this.strategyName}:`, err);
-        // Also unwind paper on error
-        super.closePaper(price, 0, time);
+        dashboardBus.emitActivity({
+          strategyName: this.strategyName,
+          level: 'error',
+          message: `Drift open failed — ${err instanceof Error ? err.message : String(err)}`,
+          timestamp: Date.now() / 1000,
+        });
+        super.cancelOpen(time);
       });
   }
 
@@ -126,10 +143,26 @@ export class LiveTrader extends PaperTrader {
       .close(this.strategyName, this.subAccountId, this.marketIndex)
       .then(() => {
         this._pendingClose = false;
+        dashboardBus.emitActivity({
+          strategyName: this.strategyName,
+          level: 'info',
+          message: 'Drift position closed successfully',
+          timestamp: Date.now() / 1000,
+        });
       })
       .catch((err) => {
         console.error(`[live-trader] DRIFT CLOSE FAILED ${this.strategyName}:`, err);
-        this._pendingClose = false;
+        // Keep _pendingClose=true to block all new opens — position is still on Drift with SL protection
+        console.error(
+          `[live-trader] *** STRATEGY HALTED *** ${this.strategyName} — ` +
+          `Drift position not closed. Restart bot to recover.`,
+        );
+        dashboardBus.emitActivity({
+          strategyName: this.strategyName,
+          level: 'error',
+          message: 'STRATEGY HALTED — close failed after all retries, SL preserved. Restart bot to recover.',
+          timestamp: Date.now() / 1000,
+        });
       });
 
     return trade;

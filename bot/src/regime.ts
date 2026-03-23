@@ -159,6 +159,17 @@ export class RegimeStrategy implements BaseStrategy {
         timestamp: trade.exitTime,
       });
     });
+
+    this.paper.onOpenCancelled((info) => {
+      // Apply cooldown so the strategy doesn't immediately re-enter after a failed fill
+      this.lastExitTickTime = info.time;
+      this.lastExitReason = 'fill-cancelled';
+      this.bankroll?.releaseCapital(info.sizeSol / LEVERAGE);
+      console.log(`[${this.name}] Open cancelled — Drift fill failed, ${this.config.cooldownSeconds}s cooldown`);
+      decisionLog.log('exit', this.name, this.lastPrice,
+        `Open cancelled — Drift fill failed, ${this.config.cooldownSeconds}s cooldown applied`,
+        { reason: 'fill-cancelled', direction: info.direction, sizeSol: info.sizeSol });
+    });
   }
 
   onTick(tick: Tick): void {

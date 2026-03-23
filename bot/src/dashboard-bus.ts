@@ -94,6 +94,13 @@ export interface AccountEvent {
   cumulativeTwr?: number;
 }
 
+export interface ActivityEvent {
+  strategyName: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  timestamp: number;
+}
+
 class DashboardBus extends EventEmitter {
   private lastPriceEmit = 0;
   private pendingPrice: PriceEvent | null = null;
@@ -144,6 +151,11 @@ class DashboardBus extends EventEmitter {
 
   emitMarket(event: MarketEvent): void {
     this.emit('market', event);
+  }
+
+  emitActivity(event: ActivityEvent): void {
+    if (event.timestamp < 1e12) event.timestamp *= 1000;
+    this.emit('activity', event);
   }
 
   shutdown(): void {
