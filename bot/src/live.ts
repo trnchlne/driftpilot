@@ -40,6 +40,7 @@ import { DriftExecutor } from './executor.js';
 import { LiveStateManager } from './live-state.js';
 import { LiveTrader } from './live-trader.js';
 import { RoiTracker } from './roi-tracker.js';
+import { startNotifier } from './notifier.js';
 import type { RoiResult } from './roi-tracker.js';
 
 
@@ -289,9 +290,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // 8. Start dashboard
+  // 8. Start dashboard + notifications
   const dashboard = new DashboardServer();
   dashboard.start();
+  startNotifier();
 
   // Wire feed to dashboard for health reporting — subscribe to all needed feeds
   const feed = new PriceFeed(uniqueFeedIds);
