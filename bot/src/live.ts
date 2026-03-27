@@ -186,7 +186,17 @@ async function main(): Promise<void> {
   });
 
   await driftClient.subscribe();
-  console.log('[live] Drift client connected');
+
+  // Priority fees: improve tx landing rate during Solana congestion
+  // 1000 µL/CU × ~200k CU = ~0.0002 SOL per tx (~$0.017)
+  // 0.12 SOL covers ~600 transactions — months of trading
+  driftClient.txParams = {
+    computeUnitsPrice: 1_000,
+    useSimulatedComputeUnits: true,
+    computeUnitsBufferMultiplier: 1.3,
+  };
+
+  console.log('[live] Drift client connected (priority fee: 1k µL/CU)');
 
   // 2b. Set 10x max leverage on all active subaccounts per market
   const TARGET_LEVERAGE = 10;
